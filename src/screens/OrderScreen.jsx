@@ -8,20 +8,23 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   const [phone, setPhone] = useState('')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
-  const [searching, setSearching] = useState(false)
+  const [searching, setSearching] = useState(true)
 
   const searchProducts = useCallback(async () => {
-    if (!search.trim()) { setProducts([]); return }
     setSearching(true)
     try {
-      const like = `%${search.trim()}%`
-      const { data, error } = await supabase
+      let q = supabase
         .from('products')
-        .select('id,name,price,stock,sku,carton_price,units')
+        .select('id,name,price,stock,sku,carton_price,units,image')
         .eq('disabled', false)
-        .or(`name.ilike.${like},sku.ilike.${like}`)
-        .order('name')
-        .limit(20)
+
+      if (search.trim()) {
+        const like = `%${search.trim()}%`
+        q = q.or(`name.ilike.${like},sku.ilike.${like}`)
+      }
+
+      // ✅ بدون بحث: تُعرض قائمة افتراضية (الأحدث إضافة) بدل شاشة فارغة تنتظر كتابة
+      const { data, error } = await q.order(search.trim() ? 'name' : 'created_at', { ascending: !!search.trim() ? true : false }).limit(30)
       if (error) throw error
       setProducts(data || [])
     } catch (e) {
@@ -98,16 +101,25 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
         style={{ width: '100%', padding: 12, borderRadius: 14, border: '1.5px solid #E2E8F0', marginBottom: 12, fontSize: 14, fontFamily: 'inherit' }}
       />
 
-      {searching && <div style={{ textAlign: 'center', color: '#94a3b8', padding: 16 }}>⏳ جارِ البحث...</div>}
+      {searching && products.length === 0 && <div style={{ textAlign: 'center', color: '#94a3b8', padding: 16 }}>⏳ جارِ التحميل...</div>}
+
+      {!searching && !search.trim() && products.length > 0 && (
+        <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 700, marginBottom: 8 }}>📦 أحدث المنتجات (اكتب بالأعلى للبحث في كل الكتالوج)</div>
+      )}
 
       {products.map(p => (
         <button key={p.id} onClick={() => addToCart(p)}
-          style={{ width: '100%', background: 'white', borderRadius: 14, padding: 12, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'right' }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</div>
+          style={{ width: '100%', background: 'white', borderRadius: 14, padding: 10, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'right' }}>
+          {p.image ? (
+            <img src={p.image} alt="" style={{ width: 46, height: 46, objectFit: 'cover', borderRadius: 10, flexShrink: 0, background: '#F8FAFC' }} />
+          ) : (
+            <div style={{ width: 46, height: 46, borderRadius: 10, background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>📦</div>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>{p.price} دج {p.carton_price ? `— كرتون ${p.carton_price} دج` : ''}</div>
           </div>
-          <span style={{ background: '#EEF4FF', color: '#1565C0', borderRadius: 10, padding: '6px 12px', fontWeight: 800, fontSize: 18 }}>+</span>
+          <span style={{ background: '#EEF4FF', color: '#1565C0', borderRadius: 10, padding: '6px 12px', fontWeight: 800, fontSize: 18, flexShrink: 0 }}>+</span>
         </button>
       ))}
 
