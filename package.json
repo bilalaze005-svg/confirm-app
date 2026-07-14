@@ -1,7 +1,7 @@
 {
-  "name": "naqaa-confirm",
+  "name": "naqaa-sales-rep",
   "version": "1.0.0",
-  "description": "تطبيق تأكيد الطلبات - نقاء (PWA / موبايل)",
+  "description": "مندوب المبيعات - نقاء (PWA / موبايل)",
   "private": true,
   "type": "module",
   "scripts": {
