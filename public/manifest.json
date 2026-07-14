@@ -1,7 +1,7 @@
 {
-  "name": "نقاء — طلبيات المحلات",
-  "short_name": "نقاء محلات",
-  "description": "تطبيق تأكيد طلبات العملاء هاتفياً",
+  "name": "مندوب المبيعات",
+  "short_name": "مندوب مبيعات",
+  "description": "مندوب مبيعات ميداني — تسجيل طلبيات المحلات",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#5B21B6",
