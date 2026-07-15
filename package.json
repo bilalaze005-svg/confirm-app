@@ -1,22 +1,27 @@
 {
-  "name": "naqaa-sales-rep",
-  "version": "1.0.0",
-  "description": "مندوب المبيعات - نقاء (PWA / موبايل)",
+  "name": "naqaa-confirm-app",
   "private": true,
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5176",
+    "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 5176"
+    "preview": "vite preview",
+    "cap:sync": "vite build && npx cap sync android",
+    "cap:open": "npx cap open android"
   },
   "dependencies": {
+    "@capacitor-community/bluetooth-le": "^6.1.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "html5-qrcode": "^2.3.8",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "@supabase/supabase-js": "^2.47.3",
-    "jsqr": "^1.4.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^5.4.19"
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.2"
   }
 }

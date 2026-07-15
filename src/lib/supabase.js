@@ -1,21 +1,22 @@
-/**
- * Supabase client — نفس إعدادات تطبيقات نقاء الأخرى
- * الإعدادات في .env.local أو متغيرات بيئة Vercel:
- * VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
- */
 import { createClient } from '@supabase/supabase-js'
 
-const URL = import.meta.env.VITE_SUPABASE_URL
-const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+/**
+ * @file supabase.js
+ * @description عميل Supabase موحّد لكل التطبيق. القيم تُقرأ من ملف .env
+ * (VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY). مفتاح anon/publishable آمن
+ * تماماً لوضعه بكود الواجهة (client-side) — هذا هو الغرض منه أصلاً، الحماية
+ * الفعلية تكون عبر Row Level Security (RLS) بجداول Supabase نفسها.
+ */
 
-export const configError = (!URL || !KEY)
-  ? '⚠️ إعدادات الاتصال ناقصة: أضف VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY بإعدادات Vercel (Environment Variables) ثم أعد النشر (Redeploy).'
-  : null
+const url = import.meta.env.VITE_SUPABASE_URL
+const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (configError) console.error(configError)
+export let configError = null
+if (!url || !anonKey) {
+  configError = '⚠️ إعدادات Supabase غير مكتملة — تأكد من وجود VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY بملف .env'
+}
 
-export const supabase = configError
-  ? { from: () => ({ select: () => ({ order: () => Promise.resolve({ data: [], error: { message: configError } }) }) }) }
-  : createClient(URL, KEY, {
-      auth: { autoRefreshToken: true, persistSession: true },
-    })
+export const supabase = createClient(
+  url || 'https://placeholder.supabase.co',
+  anonKey || 'placeholder-key'
+)
