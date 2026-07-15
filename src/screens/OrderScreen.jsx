@@ -14,6 +14,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   const [saving, setSaving] = useState(false)
   const [searching, setSearching] = useState(true)
   const [completedOrder, setCompletedOrder] = useState(null) // بعد الإرسال بنجاح، نعرض شاشة تأكيد فيها زر طباعة
+  const [cartExpanded, setCartExpanded] = useState(false) // السلة تبدأ مطوية كشريط صغير، وتتوسّع فقط عند الضغط عليها
   const requestIdRef = useRef(0)
 
   const searchProducts = useCallback(async () => {
@@ -172,7 +173,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   }
 
   return (
-    <div style={{ padding: 16, paddingBottom: cart.length > 0 ? 320 : 20 }}>
+    <div style={{ padding: 16, paddingBottom: cart.length > 0 ? (cartExpanded ? 320 : 90) : 20 }}>
       <div style={{ ...cardStyle, padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🏬</div>
@@ -252,11 +253,31 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
         <div style={{ textAlign: 'center', color: T.textFaint, padding: 30 }}>لا توجد نتائج</div>
       )}
 
-      {cart.length > 0 && (
-        <div style={{ position: 'fixed', bottom: 0, right: 0, left: 0, maxWidth: 500, margin: '0 auto', background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -8px 30px rgba(15,23,42,.12)', padding: 18, maxHeight: '60vh', overflowY: 'auto' }}>
-          <div style={{ width: 40, height: 4, background: T.border, borderRadius: 4, margin: '0 auto 14px' }} />
-          <div style={{ fontWeight: 900, fontSize: 15, marginBottom: 12 }}>🧾 طلبية {store.name} ({totalItems} قطعة)</div>
-          {cart.map(c => (
+      {cart.length > 0 && !cartExpanded && (
+        <button onClick={() => setCartExpanded(true)}
+          style={{ position: 'fixed', bottom: 16, right: 16, left: 16, maxWidth: 468, margin: '0 auto', background: T.primaryGradient, color: 'white', border: 'none', borderRadius: T.radiusPill, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 8px 24px rgba(124,58,237,.35)', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 13.5 }}>
+            <span style={{ background: 'rgba(255,255,255,.25)', borderRadius: '50%', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>{totalItems}</span>
+            🧾 عرض السلة
+          </span>
+          <span style={{ fontWeight: 900, fontSize: 15 }}>{total.toFixed(0)} دج</span>
+        </button>
+      )}
+
+      {cart.length > 0 && cartExpanded && (
+        <>
+          {/* خلفية شفافة: الضغط خارج اللوحة يطويها بدل حذف أي بيانات */}
+          <div onClick={() => setCartExpanded(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.35)', zIndex: 40 }} />
+
+          <div style={{ position: 'fixed', bottom: 0, right: 0, left: 0, maxWidth: 500, margin: '0 auto', background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -8px 30px rgba(15,23,42,.12)', padding: 18, maxHeight: '75vh', overflowY: 'auto', zIndex: 41 }}>
+            <button onClick={() => setCartExpanded(false)} aria-label="طي السلة"
+              style={{ width: 40, height: 4, background: T.border, borderRadius: 4, margin: '0 auto 14px', display: 'block', border: 'none', padding: 12, cursor: 'pointer' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontWeight: 900, fontSize: 15 }}>🧾 طلبية {store.name} ({totalItems} قطعة)</div>
+              <button onClick={() => setCartExpanded(false)} style={{ background: T.bg, border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: 13, color: T.textFaint }}>✕</button>
+            </div>
+            {cart.map(c => (
             <div key={c.product_id} style={{ padding: '8px 0', borderBottom: `1px solid ${T.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 {c.image ? (
@@ -277,23 +298,24 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
                 </button>
               ) : null}
             </div>
-          ))}
+            ))}
 
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="📱 هاتف للتواصل (اختياري)"
-            style={{ ...inputStyle, padding: 11, marginTop: 12, marginBottom: 8, fontSize: 13 }} />
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="📝 ملاحظة للتوصيل (اختياري)"
-            style={{ ...inputStyle, padding: 11, marginBottom: 10, fontSize: 13 }} />
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="📱 هاتف للتواصل (اختياري)"
+              style={{ ...inputStyle, padding: 11, marginTop: 12, marginBottom: 8, fontSize: 13 }} />
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="📝 ملاحظة للتوصيل (اختياري)"
+              style={{ ...inputStyle, padding: 11, marginBottom: 10, fontSize: 13 }} />
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 17, marginBottom: 12 }}>
-            <span style={{ color: T.textSoft, fontSize: 13, alignSelf: 'center' }}>الإجمالي</span>
-            <span style={{ color: T.primary }}>{total.toFixed(0)} دج</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 17, marginBottom: 12 }}>
+              <span style={{ color: T.textSoft, fontSize: 13, alignSelf: 'center' }}>الإجمالي</span>
+              <span style={{ color: T.primary }}>{total.toFixed(0)} دج</span>
+            </div>
+
+            <button disabled={saving} onClick={submitOrder}
+              style={{ ...buttonPrimary, width: '100%', padding: 15, fontSize: 15, background: saving ? T.textFaint : T.primaryGradient }}>
+              {saving ? '⏳ جارِ الإرسال...' : '✅ إرسال الطلبية'}
+            </button>
           </div>
-
-          <button disabled={saving} onClick={submitOrder}
-            style={{ ...buttonPrimary, width: '100%', padding: 15, fontSize: 15, background: saving ? T.textFaint : T.primaryGradient }}>
-            {saving ? '⏳ جارِ الإرسال...' : '✅ إرسال الطلبية'}
-          </button>
-        </div>
+        </>
       )}
     </div>
   )
