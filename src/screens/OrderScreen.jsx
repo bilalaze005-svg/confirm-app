@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { T, cardStyle, buttonPrimary, buttonGhost, inputStyle } from '../lib/theme.js'
 import PrintButton from '../components/PrintButton.jsx'
+import { getAutoPrint, isConnected, reconnectSavedPrinter, printReceipt } from '../lib/print.js'
 
 const LOW_STOCK_THRESHOLD = 5
 
@@ -25,6 +26,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
         .from('products')
         .select('id,name,price,stock,sku,carton_price,units,image')
         .eq('disabled', false)
+        .gt('stock', 0)
 
       if (search.trim()) {
         const like = `%${search.trim()}%`
@@ -131,14 +133,24 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
       })
       if (error) throw error
       showToast(`✅ تم تسجيل طلبية "${store.name}" بقيمة ${total.toFixed(0)} دج`)
-      setCompletedOrder({
+      const newOrder = {
         storeName: store.name,
         address: store.address,
         items,
         total,
         employeeName: employee.name,
         dateStr: new Date().toLocaleString('ar'),
-      })
+      }
+      setCompletedOrder(newOrder)
+      // ✅ طباعة تلقائية بعد كل بيع (إعداد اختياري بشاشة إعدادات الطباعة)
+      if (getAutoPrint()) {
+        try {
+          if (!isConnected()) await reconnectSavedPrinter()
+          if (isConnected()) { await printReceipt(newOrder); showToast('🖨️ طُبعت الفاتورة تلقائياً') }
+        } catch (e) {
+          console.error('❌ خطأ الطباعة التلقائية:', e)
+        }
+      }
       setCart([]); setPhone(''); setNote('')
     } catch (e) {
       console.error('❌ خطأ إرسال الطلبية:', e)

@@ -2,23 +2,55 @@ import { BleClient } from '@capacitor-community/bluetooth-le'
 
 /**
  * @file print.js
- * @description طباعة فاتورة عبر طابعة حرارية 80مم متصلة بـ Bluetooth Low Energy (BLE).
+ * @description طباعة فاتورة عبر طابعة حرارية متصلة بـ Bluetooth Low Energy (BLE)
+ * باستخدام @capacitor-community/bluetooth-le (يشتغل داخل تطبيق Android الحقيقي،
+ * بخلاف Web Bluetooth اللي لا يعمل داخل WebView التطبيقات).
  *
- * ⚠️ ملاحظة تقنية مهمة تم تصحيحها في هذه النسخة:
- * الإصدار الأول من هذا الملف كان يستخدم Web Bluetooth (navigator.bluetooth) مباشرة.
- * هذا يشتغل تمام في متصفح Chrome العادي، لكن **لا يعمل إطلاقاً داخل تطبيق Android
- * المبني بـ Capacitor** لأن WebView المستخدم بالتطبيقات (حتى لو مبني على Chrome) لا
- * يفعّل Web Bluetooth API بتاتاً — قيد من جوجل نفسها على كل الـ WebViews وليس خاص
- * بهذا المشروع. لذلك تم استبدالها بـ @capacitor-community/bluetooth-le وهو الجسر
- * الرسمي الذي يتصل مباشرة بأجهزة البلوتوث الأصلية للنظام (Native Android Bluetooth API)
- * ويشتغل صحيح داخل التطبيق المُعبّأ.
- *
- * باقي الملاحظات (تنطبق بنفس القدر هنا):
- * 1) الطابعة يجب أن تكون BLE. لو طابعتك Bluetooth Classic (SPP) فهذا الجسر أيضاً لن
- *    يتصل بها — ولا حل ويب/Capacitor عام يقدر يحلها، تحتاج كود Android أصلي مخصص.
- * 2) النص العربي يُرسل كصورة (raster bitmap) بدل نص خام، لأن أغلب الطابعات الرخيصة
- *    لا تدعم ترميز UTF-8/العربي بجداولها الداخلية.
+ * ملاحظات مهمة:
+ * 1) الطابعة يجب أن تكون BLE، وليس Bluetooth Classic (SPP).
+ * 2) النص العربي يُرسل كصورة (raster bitmap) لأن أغلب الطابعات الرخيصة لا تدعم
+ *    ترميز UTF-8/العربي بجداولها الداخلية.
  */
+
+// ── إعدادات محفوظة (حجم الورق + حجم الخط + هوية آخر طابعة متصلة) ──
+const PAPER_STORAGE_KEY = 'nq_confirm_paper_size'
+const FONT_STORAGE_KEY = 'nq_confirm_print_font_scale'
+const PRINTER_ID_KEY = 'nq_confirm_printer_device_id'
+const PRINTER_NAME_KEY = 'nq_confirm_printer_name'
+
+// عرض الطباعة بالنقاط لكل حجم ورق شائع (بدقة 203dpi القياسية لهذه الطابعات)
+export const PAPER_WIDTH_DOTS = { Roll80: 576, Roll58: 384 }
+export const PRINT_FONT_SCALE = { small: 0.8, medium: 1, large: 1.35 }
+
+export function getPaperSize() { return localStorage.getItem(PAPER_STORAGE_KEY) || 'Roll80' }
+export function setPaperSize(key) { localStorage.setItem(PAPER_STORAGE_KEY, key) }
+
+export function getPrintFontSize() { return localStorage.getItem(FONT_STORAGE_KEY) || 'medium' }
+export function setPrintFontSize(key) { localStorage.setItem(FONT_STORAGE_KEY, key) }
+
+const AUTOPRINT_KEY = 'nq_confirm_autoprint'
+const COPIES_KEY = 'nq_confirm_print_copies'
+const FOOTER_KEY = 'nq_confirm_print_footer'
+
+export function getAutoPrint() { return localStorage.getItem(AUTOPRINT_KEY) === '1' }
+export function setAutoPrint(v) { localStorage.setItem(AUTOPRINT_KEY, v ? '1' : '0') }
+
+export function getPrintCopies() { return parseInt(localStorage.getItem(COPIES_KEY) || '1', 10) }
+export function setPrintCopies(n) { localStorage.setItem(COPIES_KEY, String(Math.min(Math.max(n, 1), 5))) }
+
+export function getFooterText() { return localStorage.getItem(FOOTER_KEY) || '' }
+export function setFooterText(t) { localStorage.setItem(FOOTER_KEY, t || '') }
+
+export function getSavedPrinterName() { return localStorage.getItem(PRINTER_NAME_KEY) || null }
+
+function saveConnectedPrinter(deviceId, name) {
+  localStorage.setItem(PRINTER_ID_KEY, deviceId)
+  localStorage.setItem(PRINTER_NAME_KEY, name || 'طابعة بدون اسم')
+}
+export function forgetSavedPrinter() {
+  localStorage.removeItem(PRINTER_ID_KEY)
+  localStorage.removeItem(PRINTER_NAME_KEY)
+}
 
 const CANDIDATE_SERVICES = [
   { service: '000018f0-0000-1000-8000-00805f9b34fb', writeChar: '00002af1-0000-1000-8000-00805f9b34fb' },
@@ -37,51 +69,68 @@ async function ensureInitialized() {
   }
 }
 
-export function isSupported() {
-  // متاح دوماً تقريباً (المتصفح لو Web Bluetooth مدعوم، أو داخل تطبيق Capacitor)
-  return true
+export function isSupported() { return true }
+export function isConnected() { return !!_deviceId && !!_matchedService }
+
+async function discoverWritableService(deviceId) {
+  const services = await BleClient.getServices(deviceId)
+  for (const candidate of CANDIDATE_SERVICES) {
+    const svc = services.find(s => s.uuid.toLowerCase() === candidate.service.toLowerCase())
+    const ch = svc?.characteristics.find(c => c.uuid.toLowerCase() === candidate.writeChar.toLowerCase())
+    if (ch && (ch.properties.write || ch.properties.writeWithoutResponse)) {
+      return { ...candidate, useWriteWithoutResponse: !!ch.properties.writeWithoutResponse }
+    }
+  }
+  return null
 }
 
-// يفتح نافذة اختيار جهاز البلوتوث، يتصل، ويكتشف أول خدمة طباعة معروفة يدعمها الجهاز
-export async function connectPrinter() {
+// يفتح نافذة اختيار جهاز بلوتوث جديد، يتصل، ويحفظ هويته لإعادة الاتصال تلقائياً لاحقاً
+export async function pickAndConnectPrinter() {
   await ensureInitialized()
 
   const device = await BleClient.requestDevice({
     optionalServices: CANDIDATE_SERVICES.map(c => c.service),
   })
 
-  await BleClient.connect(device.deviceId, () => {
-    _deviceId = null
-    _matchedService = null
-  })
-
+  await BleClient.connect(device.deviceId, () => { _deviceId = null; _matchedService = null })
   _deviceId = device.deviceId
 
-  // نفحص الخدمات الفعلية المتوفرة بالجهاز ونطابقها مع قائمتنا المرشّحة، ونتحقق
-  // أيضاً أن الخاصية تدعم الكتابة فعلاً (بدل تخمين ذلك)
-  const services = await BleClient.getServices(device.deviceId)
-  for (const candidate of CANDIDATE_SERVICES) {
-    const svc = services.find(s => s.uuid.toLowerCase() === candidate.service.toLowerCase())
-    const ch = svc?.characteristics.find(c => c.uuid.toLowerCase() === candidate.writeChar.toLowerCase())
-    if (ch && (ch.properties.write || ch.properties.writeWithoutResponse)) {
-      _matchedService = { ...candidate, useWriteWithoutResponse: !!ch.properties.writeWithoutResponse }
-      return { name: device.name || 'طابعة بدون اسم' }
-    }
+  const matched = await discoverWritableService(device.deviceId)
+  if (!matched) {
+    await BleClient.disconnect(device.deviceId)
+    _deviceId = null
+    throw new Error('تم الاتصال بالجهاز لكن لم يتم العثور على خدمة طباعة معروفة — أرسل لي موديل طابعتك بالضبط لأضيف معرّفها')
   }
 
-  await BleClient.disconnect(device.deviceId)
-  _deviceId = null
-  throw new Error('تم الاتصال بالجهاز لكن لم يتم العثور على خدمة طباعة معروفة — أرسل لي موديل طابعتك بالضبط لأضيف معرّفها')
+  _matchedService = matched
+  saveConnectedPrinter(device.deviceId, device.name)
+  return { name: device.name || 'طابعة بدون اسم' }
+}
+
+// يحاول الاتصال بآخر طابعة محفوظة تلقائياً (بدون فتح نافذة اختيار) — يفشل بهدوء لو
+// كانت الطابعة غير موجودة بمدى البلوتوث أو مطفأة
+export async function reconnectSavedPrinter() {
+  const savedId = localStorage.getItem(PRINTER_ID_KEY)
+  if (!savedId) return false
+  await ensureInitialized()
+  try {
+    await BleClient.connect(savedId, () => { _deviceId = null; _matchedService = null })
+    _deviceId = savedId
+    const matched = await discoverWritableService(savedId)
+    if (!matched) throw new Error('no matching service')
+    _matchedService = matched
+    return true
+  } catch {
+    _deviceId = null
+    _matchedService = null
+    return false
+  }
 }
 
 export function disconnectPrinter() {
   if (_deviceId) BleClient.disconnect(_deviceId).catch(() => {})
   _deviceId = null
   _matchedService = null
-}
-
-export function isConnected() {
-  return !!_deviceId && !!_matchedService
 }
 
 // يرسل بايتات خام للطابعة، مقسّمة لدفعات صغيرة (أغلب طابعات BLE تقبل ~180-244 بايت كحد أقصى بالمرة)
@@ -100,12 +149,17 @@ async function writeBytes(bytes) {
 }
 
 // يرسم الفاتورة على canvas بالعربي (المتصفح/WebView يتكفّل بربط الحروف والاتجاه RTL تلقائياً)
-function renderReceiptCanvas({ storeName, address, items, total, employeeName, dateStr }, widthDots = 384) {
+function renderReceiptCanvas({ storeName, address, items, total, employeeName, dateStr }, widthDots, fontKey) {
+  const scale = PRINT_FONT_SCALE[fontKey] ?? 1
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
-  const lineHeight = 26
+  const lineHeight = Math.round(26 * scale)
   const padding = 12
-  const estimatedLines = 6 + items.length * 2
+  const fTitle = Math.round(24 * scale)
+  const fSub = Math.round(16 * scale)
+  const fSmall = Math.round(14 * scale)
+  const fTotal = Math.round(20 * scale)
+  const estimatedLines = 6 + items.length * 2 + (getFooterText() ? 1 : 0)
   canvas.width = widthDots
   canvas.height = estimatedLines * lineHeight + padding * 2
 
@@ -116,14 +170,14 @@ function renderReceiptCanvas({ storeName, address, items, total, employeeName, d
   ctx.textAlign = 'center'
   let y = padding + lineHeight
 
-  ctx.font = 'bold 24px sans-serif'
+  ctx.font = `bold ${fTitle}px sans-serif`
   ctx.fillText(storeName, canvas.width / 2, y); y += lineHeight
-  if (address) { ctx.font = '16px sans-serif'; ctx.fillText(address, canvas.width / 2, y); y += lineHeight }
-  ctx.font = '14px sans-serif'
+  if (address) { ctx.font = `${fSub}px sans-serif`; ctx.fillText(address, canvas.width / 2, y); y += lineHeight }
+  ctx.font = `${fSmall}px sans-serif`
   ctx.fillText(dateStr, canvas.width / 2, y); y += lineHeight * 1.2
 
   ctx.textAlign = 'right'
-  ctx.font = '16px sans-serif'
+  ctx.font = `${fSub}px sans-serif`
   items.forEach(it => {
     ctx.fillText(`${it.name} × ${it.quantity}`, canvas.width - padding, y)
     ctx.textAlign = 'left'
@@ -136,15 +190,22 @@ function renderReceiptCanvas({ storeName, address, items, total, employeeName, d
   ctx.strokeStyle = '#000'; ctx.beginPath(); ctx.moveTo(padding, y); ctx.lineTo(canvas.width - padding, y); ctx.stroke()
   y += lineHeight
 
-  ctx.font = 'bold 20px sans-serif'
+  ctx.font = `bold ${fTotal}px sans-serif`
   ctx.fillText('الإجمالي', canvas.width - padding, y)
   ctx.textAlign = 'left'
   ctx.fillText(`${total.toFixed(0)} دج`, padding, y)
   y += lineHeight * 1.2
 
   ctx.textAlign = 'center'
-  ctx.font = '14px sans-serif'
+  ctx.font = `${fSmall}px sans-serif`
   ctx.fillText(`المندوب: ${employeeName}`, canvas.width / 2, y)
+
+  const footer = getFooterText()
+  if (footer) {
+    y += lineHeight
+    ctx.font = `${fSmall}px sans-serif`
+    ctx.fillText(footer, canvas.width / 2, y)
+  }
 
   return canvas
 }
@@ -161,10 +222,7 @@ function canvasToEscposRaster(canvas) {
     for (let xx = 0; xx < width; xx++) {
       const idx = (yy * width + xx) * 4
       const gray = (imgData[idx] + imgData[idx + 1] + imgData[idx + 2]) / 3
-      const isBlack = gray < 160
-      if (isBlack) {
-        raster[yy * bytesPerRow + (xx >> 3)] |= 0x80 >> (xx % 8)
-      }
+      if (gray < 160) raster[yy * bytesPerRow + (xx >> 3)] |= 0x80 >> (xx % 8)
     }
   }
 
@@ -181,19 +239,29 @@ function canvasToEscposRaster(canvas) {
 
 export async function printTestPage() {
   if (!isConnected()) throw new Error('الطابعة غير متصلة')
+  const fontKey = getPrintFontSize()
+  const sizeByte = fontKey === 'large' ? 0x11 : fontKey === 'medium' ? 0x01 : 0x00
   const init = new Uint8Array([0x1b, 0x40])
+  const setSize = new Uint8Array([0x1d, 0x21, sizeByte])
+  const resetSize = new Uint8Array([0x1d, 0x21, 0x00])
   const text = new TextEncoder().encode('=== اختبار الطباعة ===\nTest OK 123\n\n\n')
   await writeBytes(init)
+  await writeBytes(setSize)
   await writeBytes(text)
+  await writeBytes(resetSize)
 }
 
 export async function printReceipt(order) {
   if (!isConnected()) throw new Error('الطابعة غير متصلة')
-  const canvas = renderReceiptCanvas(order)
+  const widthDots = PAPER_WIDTH_DOTS[getPaperSize()] || 576
+  const canvas = renderReceiptCanvas(order, widthDots, getPrintFontSize())
   const raster = canvasToEscposRaster(canvas)
   const init = new Uint8Array([0x1b, 0x40])
   const feed = new Uint8Array([0x0a, 0x0a, 0x0a, 0x0a])
-  await writeBytes(init)
-  await writeBytes(raster)
-  await writeBytes(feed)
+  const copies = getPrintCopies()
+  for (let i = 0; i < copies; i++) {
+    await writeBytes(init)
+    await writeBytes(raster)
+    await writeBytes(feed)
+  }
 }
