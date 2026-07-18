@@ -1,45 +1,52 @@
 /**
  * @file otp.js
- * @description طبقة التحقق بخطوتين (2FA). حالياً تستخدم كود ثابت "1234" للاختبار
- * ريثما يتم تفعيل مزوّد رسائل حقيقي. كل التعديل المطلوب لاحقاً محصور بدالة
- * requestOtp فقط — بقية الكود (LoginScreen) لن يحتاج أي تعديل.
+ * @description طبقة التحقق بخطوتين (2FA) — تستعمل الآن Supabase Auth الحقيقي
+ * لإرسال والتحقق من كود عبر البريد الإلكتروني، بعد إعداد SMTP مخصص (Resend)
+ * بلوحة Supabase → Authentication → Email → SMTP Settings.
  *
- * ── كيف تفعّل رسائل SMS حقيقية لاحقاً ──
- * الخيارات الشائعة (كلها مدفوعة لكل رسالة، ما فيه خدمة SMS مجانية بالكامل):
- *   1) Twilio          — الأشهر عالمياً، ~0.01-0.05$/رسالة، فيه رصيد تجريبي مجاني بالبداية
- *   2) WhatsApp Cloud API (Meta) — أرخص من SMS غالباً لو أغلب الموظفين عندهم واتساب
- *   3) Firebase Phone Auth — نفس فكرة Twilio لكن مدمج مع Google، ~0.01-0.06$/رسالة
- * البديل المجاني الحقيقي: إرسال الكود عبر البريد الإلكتروني (مجاني تماماً عبر Supabase Auth
- * أو أي SMTP) بدل SMS — مناسب جداً لعدد موظفين محدود مثل هذا التطبيق.
+ * ⚠️ ملاحظة مهمة: هذا لا يُنشئ "جلسة دخول" حقيقية بالتطبيق (الدخول الفعلي
+ * يتم عبر verify_employee_login المخصصة، كما كان). نستخدم هنا آلية Supabase
+ * Auth فقط كوسيلة توصيل وتحقق للكود — بمجرد التأكد من صحته، نخرج فوراً من
+ * جلسة Supabase Auth (signOut) حتى لا تتعارض مع نظام الجلسات المخصص للتطبيق.
  *
- * لتفعيل أي منها: علّق/احذف سطر "TEST MODE" أدناه، وضع استدعاء API الحقيقي مكانه،
- * ثم بدّل otpVerify لتتحقق من الكود عبر الخادم (RPC في Supabase) بدل المقارنة المحلية.
+ * كود Supabase Auth الحقيقي مكوّن من 6 أرقام (وليس 4 كما كان بوضع الاختبار).
  */
+import { supabase } from './supabase.js'
 
-const TEST_MODE_CODE = '1234'
-
-// يرسل كود التحقق. حالياً (وضع اختبار) لا يرسل أي رسالة فعلية، فقط يطبع بالكونسول.
-export async function requestOtp(phone) {
-  console.log(`📤 [وضع اختبار] كود التحقق لـ ${phone} هو: ${TEST_MODE_CODE}`)
-  // TODO: عند تفعيل مزوّد حقيقي، استبدل هذا بطلب API فعلي، مثال تقريبي مع Twilio:
-  // await fetch('/api/send-otp', { method: 'POST', body: JSON.stringify({ phone }) })
-  await new Promise(r => setTimeout(r, 400)) // محاكاة زمن شبكة بسيط
+// يرسل كود التحقق الحقيقي عبر البريد الإلكتروني
+export async function requestOtp(email) {
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: true }, // يسمح بإرسال الكود حتى لو أول مرة يستخدم هذا الإيميل مع Supabase Auth
+  })
+  if (error) throw error
   return { success: true }
 }
 
-// يتحقق من الكود المُدخل من الموظف
-export function verifyOtp(code) {
-  return code.trim() === TEST_MODE_CODE
+// يتحقق من الكود المُدخل من الموظف — طلب شبكة حقيقي (لذا أصبحت async)
+export async function verifyOtp(email, code) {
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token: code.trim(),
+    type: 'email',
+  })
+  if (error || !data?.session) return false
+  // نخرج فوراً من جلسة Supabase Auth — لا نحتاجها، فقط أكّدت صحة الكود
+  await supabase.auth.signOut()
+  return true
 }
 
 export function isTestMode() {
-  return true // بدّلها لـ false يدوياً بمجرد ربط مزوّد رسائل حقيقي، كتذكير مرئي بالواجهة
+  return false // صار الإرسال حقيقياً عبر البريد الإلكتروني
 }
 
-// يخفي كل أرقام الهاتف ما عدا آخر رقمين، لعرضه بأمان بالواجهة
-export function maskPhone(phone) {
-  if (!phone) return ''
-  const digits = phone.replace(/\s+/g, '')
-  if (digits.length <= 2) return digits
-  return '•'.repeat(Math.max(digits.length - 2, 4)) + digits.slice(-2)
+// يخفي جزء من عنوان البريد الإلكتروني لعرضه بأمان بالواجهة (مثال: bi••l@naqaa.com)
+export function maskEmail(email) {
+  if (!email) return ''
+  const [user, domain] = email.split('@')
+  if (!domain) return email
+  const masked = user.length <= 2
+    ? user[0] + '•'
+    : user[0] + '•'.repeat(user.length - 2) + user.slice(-1)
+  return masked + '@' + domain
 }

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { T, buttonPrimary, buttonGhost, inputStyle } from '../lib/theme.js'
-import { requestOtp, verifyOtp, maskPhone, isTestMode } from '../lib/otp.js'
+import { requestOtp, verifyOtp, maskEmail } from '../lib/otp.js'
 
 const OTP_RESEND_SECONDS = 30
 
@@ -9,11 +9,11 @@ const OTP_RESEND_SECONDS = 30
  * @file LoginScreen.jsx
  * @description تسجيل دخول موظف تأكيد الطلبات على خطوتين:
  *   1) بريد/كلمة مرور عبر verify_employee_login (كما كانت)
- *   2) رمز تحقق (OTP) يُرسل لهاتف الموظف — راجع lib/otp.js لتفعيل مزوّد SMS حقيقي.
- * أي حساب موظف يُنشأ من admin → الموظفون يقدر يسجّل دخول هنا مباشرة بدون إعداد إضافي.
+ *   2) رمز تحقق حقيقي (6 أرقام) يُرسل عبر البريد الإلكتروني عبر Supabase Auth
+ *      (بعد إعداد SMTP بلوحة Supabase). راجع lib/otp.js للتفاصيل.
  */
 export default function LoginScreen({ onLogin }) {
-  const [step, setStep] = useState('credentials') // 'credentials' | 'phone' | 'otp'
+  const [step, setStep] = useState('credentials') // 'credentials' | 'email' | 'otp'
   const [login, setLogin] = useState('')
   const [pass, setPass] = useState('')
   const [showPass, setShowPass] = useState(false)
@@ -23,9 +23,10 @@ export default function LoginScreen({ onLogin }) {
 
   // بيانات جلسة معلّقة بانتظار إتمام OTP
   const [pendingUser, setPendingUser] = useState(null)
-  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
   const [otp, setOtp] = useState('')
   const [resendIn, setResendIn] = useState(0)
+  const [otpBusy, setOtpBusy] = useState(false)
   const otpRef = useRef(null)
 
   const canSubmit = login.trim() && pass && !loading
@@ -70,18 +71,21 @@ export default function LoginScreen({ onLogin }) {
       const sessionUser = { id: emp.emp_id, name: emp.emp_name }
       setPendingUser(sessionUser)
 
-      // رقم الهاتف: نجرب رقم الموظف من قاعدة البيانات (لو الحقل موجود)، وإلا نطلبه
-      // ونحفظه محلياً للمرات القادمة (كل موظف على جهازه الخاص غالباً)
-      const savedPhone = localStorage.getItem(`nq_confirm_phone_${emp.emp_id}`)
-      const dbPhone = emp.emp_phone || null
-      const knownPhone = dbPhone || savedPhone
+      // البريد الإلكتروني لإرسال رمز التحقق: نجرب بريد الموظف من قاعدة البيانات
+      // (لو الحقل موجود)، وإلا نجرب الإيميل المحفوظ محلياً من مرة سابقة، وإلا
+      // نستخدم حقل تسجيل الدخول نفسه لو كان شكله بريداً إلكترونياً صحيحاً،
+      // وإلا نطلبه صراحة (خطوة "email" أدناه).
+      const savedEmail = localStorage.getItem(`nq_confirm_email_${emp.emp_id}`)
+      const dbEmail = emp.emp_email || null
+      const loginLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login.trim())
+      const knownEmail = dbEmail || savedEmail || (loginLooksLikeEmail ? login.trim() : null)
 
-      if (knownPhone) {
-        setPhone(knownPhone)
-        await sendOtpTo(knownPhone)
-        setStep('otp')
+      if (knownEmail) {
+        setEmail(knownEmail)
+        const ok = await sendOtpTo(knownEmail)
+        if (ok) setStep('otp')
       } else {
-        setStep('phone') // أول مرة، نطلب رقم الهاتف قبل إرسال الرمز
+        setStep('email') // أول مرة، نطلب البريد الإلكتروني قبل إرسال الرمز
       }
     } catch (e) {
       console.error('❌ خطأ تسجيل الدخول:', e)
@@ -92,67 +96,73 @@ export default function LoginScreen({ onLogin }) {
     }
   }
 
-  const sendOtpTo = async (phoneNumber) => {
+  const sendOtpTo = async (emailAddress) => {
     try {
-      await requestOtp(phoneNumber)
+      await requestOtp(emailAddress)
       setResendIn(OTP_RESEND_SECONDS)
+      return true
     } catch (e) {
       console.error('❌ خطأ إرسال رمز التحقق:', e)
-      setErr('تعذّر إرسال رمز التحقق، حاول مجدداً')
+      setErr('تعذّر إرسال رمز التحقق — تحقق من صحة البريد الإلكتروني وحاول مجدداً')
+      return false
     }
   }
 
-  const confirmPhone = async () => {
-    const trimmed = phone.trim()
-    if (trimmed.length < 8) { setErr('أدخل رقم هاتف صحيح'); return }
+  const confirmEmail = async () => {
+    const trimmed = email.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) { setErr('أدخل بريداً إلكترونياً صحيحاً'); return }
     setErr('')
-    localStorage.setItem(`nq_confirm_phone_${pendingUser.id}`, trimmed)
-    await sendOtpTo(trimmed)
-    setStep('otp')
+    localStorage.setItem(`nq_confirm_email_${pendingUser.id}`, trimmed)
+    const ok = await sendOtpTo(trimmed)
+    if (ok) setStep('otp')
   }
 
-  const submitOtp = () => {
-    if (!verifyOtp(otp)) { setErr('❌ رمز التحقق غير صحيح'); return }
-    localStorage.setItem('nq_confirm_employee', JSON.stringify(pendingUser))
-    onLogin(pendingUser)
+  const submitOtp = async () => {
+    setOtpBusy(true)
+    setErr('')
+    try {
+      const ok = await verifyOtp(email, otp)
+      if (!ok) { setErr('❌ رمز التحقق غير صحيح أو منتهي الصلاحية'); setOtpBusy(false); return }
+      localStorage.setItem('nq_confirm_employee', JSON.stringify(pendingUser))
+      onLogin(pendingUser)
+    } catch (e) {
+      console.error('❌ خطأ التحقق من الرمز:', e)
+      setErr('تعذّر التحقق من الرمز — حاول مجدداً')
+      setOtpBusy(false)
+    }
   }
 
   const backToCredentials = () => {
     setStep('credentials'); setErr(''); setOtp(''); setPendingUser(null)
   }
 
-  // ── خطوة 3: إدخال رمز التحقق ──
+  // ── خطوة 3: إدخال رمز التحقق (6 أرقام) ──
   if (step === 'otp') {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, background: T.primaryGradient }}>
         <div style={{ background: 'white', borderRadius: 28, padding: 30, boxShadow: '0 20px 50px rgba(0,0,0,.2)' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
-            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📱</div>
+            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📧</div>
             <h1 style={{ fontSize: 17, fontWeight: 900 }}>تحقق برمز الأمان</h1>
-            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أُرسل رمز مكوّن من 4 أرقام إلى {maskPhone(phone)}</p>
-            {isTestMode() && (
-              <p style={{ fontSize: 11, color: T.warning, background: T.warningBg, borderRadius: 8, padding: '5px 8px', marginTop: 8, display: 'inline-block' }}>
-                ⚠️ وضع اختبار: الرمز الحالي دائماً 1234
-              </p>
-            )}
+            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أُرسل رمز مكوّن من 6 أرقام إلى {maskEmail(email)}</p>
           </div>
 
           <input
-            ref={otpRef} autoFocus value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 4))}
-            onKeyDown={(e) => e.key === 'Enter' && otp.length === 4 && submitOtp()}
-            inputMode="numeric" maxLength={4}
-            style={{ ...inputStyle, textAlign: 'center', fontSize: 26, letterSpacing: 10, fontWeight: 900, marginBottom: 14 }}
-            placeholder="••••"
+            ref={otpRef} autoFocus value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onKeyDown={(e) => e.key === 'Enter' && otp.length === 6 && !otpBusy && submitOtp()}
+            inputMode="numeric" maxLength={6}
+            style={{ ...inputStyle, textAlign: 'center', fontSize: 24, letterSpacing: 8, fontWeight: 900, marginBottom: 14 }}
+            placeholder="••••••"
           />
 
           {err && <div style={{ background: '#FEE2E2', color: T.danger, borderRadius: 12, padding: '11px 14px', fontSize: 13, marginBottom: 14, textAlign: 'center', fontWeight: 600 }}>{err}</div>}
 
-          <button onClick={submitOtp} disabled={otp.length !== 4}
-            style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5, marginBottom: 10, background: otp.length !== 4 ? T.textFaint : T.primaryGradient }}>
-            ✅ تأكيد
+          <button onClick={submitOtp} disabled={otp.length !== 6 || otpBusy}
+            style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5, marginBottom: 10, background: (otp.length !== 6 || otpBusy) ? T.textFaint : T.primaryGradient }}>
+            {otpBusy ? '⏳ جارِ التحقق...' : '✅ تأكيد'}
           </button>
 
-          <button onClick={() => sendOtpTo(phone)} disabled={resendIn > 0}
+          <button onClick={() => sendOtpTo(email)} disabled={resendIn > 0}
             style={{ background: 'none', border: 'none', color: resendIn > 0 ? T.textFaint : T.info, fontSize: 12.5, fontWeight: 700, width: '100%', padding: 8, cursor: resendIn > 0 ? 'default' : 'pointer', fontFamily: 'inherit' }}>
             {resendIn > 0 ? `إعادة الإرسال بعد ${resendIn} ثانية` : '🔁 إعادة إرسال الرمز'}
           </button>
@@ -164,28 +174,28 @@ export default function LoginScreen({ onLogin }) {
     )
   }
 
-  // ── خطوة 2 (أول مرة فقط): طلب رقم الهاتف لإرسال رمز التحقق ──
-  if (step === 'phone') {
+  // ── خطوة 2 (أول مرة فقط): طلب البريد الإلكتروني لإرسال رمز التحقق ──
+  if (step === 'email') {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, background: T.primaryGradient }}>
         <div style={{ background: 'white', borderRadius: 28, padding: 30, boxShadow: '0 20px 50px rgba(0,0,0,.2)' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
-            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📱</div>
-            <h1 style={{ fontSize: 17, fontWeight: 900 }}>رقم هاتفك</h1>
-            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أول مرة تسجّل دخول — أدخل رقمك لإرسال رمز التحقق مستقبلاً</p>
+            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📧</div>
+            <h1 style={{ fontSize: 17, fontWeight: 900 }}>بريدك الإلكتروني</h1>
+            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أول مرة تسجّل دخول — أدخل بريدك لإرسال رمز التحقق مستقبلاً</p>
           </div>
 
           <input
-            autoFocus value={phone} onChange={(e) => setPhone(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && confirmPhone()}
-            inputMode="tel" type="tel"
+            autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && confirmEmail()}
+            inputMode="email" type="email"
             style={{ ...inputStyle, marginBottom: 14, textAlign: 'center' }}
-            placeholder="05xxxxxxxx"
+            placeholder="example@naqaa.com"
           />
 
           {err && <div style={{ background: '#FEE2E2', color: T.danger, borderRadius: 12, padding: '11px 14px', fontSize: 13, marginBottom: 14, textAlign: 'center', fontWeight: 600 }}>{err}</div>}
 
-          <button onClick={confirmPhone} style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5 }}>
+          <button onClick={confirmEmail} style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5 }}>
             📤 إرسال رمز التحقق
           </button>
         </div>
