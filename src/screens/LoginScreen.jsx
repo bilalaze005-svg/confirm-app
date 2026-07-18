@@ -1,19 +1,18 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { T, buttonPrimary, buttonGhost, inputStyle } from '../lib/theme.js'
-import { requestOtp, verifyOtp, maskEmail } from '../lib/otp.js'
-
-const OTP_RESEND_SECONDS = 30
+import { T, buttonPrimary, inputStyle } from '../lib/theme.js'
+import { generateSecret, getOtpAuthUrl, verifyCode } from '../lib/totp.js'
+import TotpEnrollScreen from './TotpEnrollScreen.jsx'
 
 /**
  * @file LoginScreen.jsx
  * @description تسجيل دخول موظف تأكيد الطلبات على خطوتين:
  *   1) بريد/كلمة مرور عبر verify_employee_login (كما كانت)
- *   2) رمز تحقق حقيقي (6 أرقام) يُرسل عبر البريد الإلكتروني عبر Supabase Auth
- *      (بعد إعداد SMTP بلوحة Supabase). راجع lib/otp.js للتفاصيل.
+ *   2) تحقق ثنائي TOTP حقيقي (Google Authenticator) — راجع lib/totp.js
+ *      و TotpEnrollScreen.jsx للتفاصيل.
  */
 export default function LoginScreen({ onLogin }) {
-  const [step, setStep] = useState('credentials') // 'credentials' | 'email' | 'otp'
+  const [step, setStep] = useState('credentials') // credentials | enroll | totp
   const [login, setLogin] = useState('')
   const [pass, setPass] = useState('')
   const [showPass, setShowPass] = useState(false)
@@ -21,21 +20,12 @@ export default function LoginScreen({ onLogin }) {
   const [loading, setLoading] = useState(false)
   const passRef = useRef(null)
 
-  // بيانات جلسة معلّقة بانتظار إتمام OTP
   const [pendingUser, setPendingUser] = useState(null)
-  const [email, setEmail] = useState('')
-  const [otp, setOtp] = useState('')
-  const [resendIn, setResendIn] = useState(0)
-  const [otpBusy, setOtpBusy] = useState(false)
-  const otpRef = useRef(null)
+  const [pendingSecret, setPendingSecret] = useState(null) // سر جديد لم يُحفظ بعد (أول إعداد)
+  const [code, setCode] = useState('')
+  const [totpBusy, setTotpBusy] = useState(false)
 
   const canSubmit = login.trim() && pass && !loading
-
-  useEffect(() => {
-    if (resendIn <= 0) return
-    const t = setTimeout(() => setResendIn(s => s - 1), 1000)
-    return () => clearTimeout(t)
-  }, [resendIn])
 
   const submit = async () => {
     if (!login.trim() || !pass) { setErr('أدخل البريد/الاسم وكلمة المرور'); return }
@@ -56,7 +46,6 @@ export default function LoginScreen({ onLogin }) {
         return
       }
 
-      // ✅ تحقق من صلاحية الدخول لهذا التطبيق تحديداً (مضبوطة من لوحة الإدارة → الموظفون)
       let perms = {}
       if (emp.emp_permissions) {
         perms = typeof emp.emp_permissions === 'string' ? JSON.parse(emp.emp_permissions) : emp.emp_permissions
@@ -71,21 +60,21 @@ export default function LoginScreen({ onLogin }) {
       const sessionUser = { id: emp.emp_id, name: emp.emp_name }
       setPendingUser(sessionUser)
 
-      // البريد الإلكتروني لإرسال رمز التحقق: نجرب بريد الموظف من قاعدة البيانات
-      // (لو الحقل موجود)، وإلا نجرب الإيميل المحفوظ محلياً من مرة سابقة، وإلا
-      // نستخدم حقل تسجيل الدخول نفسه لو كان شكله بريداً إلكترونياً صحيحاً،
-      // وإلا نطلبه صراحة (خطوة "email" أدناه).
-      const savedEmail = localStorage.getItem(`nq_confirm_email_${emp.emp_id}`)
-      const dbEmail = emp.emp_email || null
-      const loginLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login.trim())
-      const knownEmail = dbEmail || savedEmail || (loginLooksLikeEmail ? login.trim() : null)
+      // ✅ نجلب سر TOTP المحفوظ (إن وُجد) للتحقق من وجود إعداد سابق
+      const { data: row, error: fetchErr } = await supabase
+        .from('employees')
+        .select('totp_secret')
+        .eq('id', emp.emp_id)
+        .single()
+      if (fetchErr) throw fetchErr
 
-      if (knownEmail) {
-        setEmail(knownEmail)
-        const ok = await sendOtpTo(knownEmail)
-        if (ok) setStep('otp')
+      if (row?.totp_secret) {
+        setPendingSecret(row.totp_secret)
+        setStep('totp') // عنده إعداد سابق — نطلب الكود مباشرة
       } else {
-        setStep('email') // أول مرة، نطلب البريد الإلكتروني قبل إرسال الرمز
+        const newSecret = generateSecret()
+        setPendingSecret(newSecret)
+        setStep('enroll') // أول مرة — نعرض شاشة الإعداد (QR + كود)
       }
     } catch (e) {
       console.error('❌ خطأ تسجيل الدخول:', e)
@@ -96,60 +85,66 @@ export default function LoginScreen({ onLogin }) {
     }
   }
 
-  const sendOtpTo = async (emailAddress) => {
+  // بعد تأكيد الإعداد الأول (من TotpEnrollScreen)، نحفظ السر بقاعدة البيانات وندخل مباشرة
+  const onEnrollConfirmed = async () => {
     try {
-      await requestOtp(emailAddress)
-      setResendIn(OTP_RESEND_SECONDS)
-      return true
-    } catch (e) {
-      console.error('❌ خطأ إرسال رمز التحقق:', e)
-      setErr('تعذّر إرسال رمز التحقق — تحقق من صحة البريد الإلكتروني وحاول مجدداً')
-      return false
-    }
-  }
-
-  const confirmEmail = async () => {
-    const trimmed = email.trim()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) { setErr('أدخل بريداً إلكترونياً صحيحاً'); return }
-    setErr('')
-    localStorage.setItem(`nq_confirm_email_${pendingUser.id}`, trimmed)
-    const ok = await sendOtpTo(trimmed)
-    if (ok) setStep('otp')
-  }
-
-  const submitOtp = async () => {
-    setOtpBusy(true)
-    setErr('')
-    try {
-      const ok = await verifyOtp(email, otp)
-      if (!ok) { setErr('❌ رمز التحقق غير صحيح أو منتهي الصلاحية'); setOtpBusy(false); return }
-      localStorage.setItem('nq_confirm_employee', JSON.stringify(pendingUser))
+      const { error } = await supabase
+        .from('employees')
+        .update({ totp_secret: pendingSecret })
+        .eq('id', pendingUser.id)
+      if (error) throw error
       onLogin(pendingUser)
     } catch (e) {
-      console.error('❌ خطأ التحقق من الرمز:', e)
-      setErr('تعذّر التحقق من الرمز — حاول مجدداً')
-      setOtpBusy(false)
+      console.error('❌ خطأ حفظ سر التحقق:', e)
+      setErr('تعذّر حفظ إعداد التحقق الثنائي — حاول مجدداً')
+      setStep('credentials')
     }
+  }
+
+  const submitTotp = () => {
+    if (code.trim().length !== 6) { setErr('أدخل الكود المكوّن من 6 أرقام'); return }
+    setTotpBusy(true)
+    setErr('')
+    const ok = verifyCode(pendingSecret, code)
+    if (!ok) {
+      setErr('❌ الكود غير صحيح — تأكد من الوقت بهاتفك وحاول مجدداً')
+      setTotpBusy(false)
+      return
+    }
+    onLogin(pendingUser)
   }
 
   const backToCredentials = () => {
-    setStep('credentials'); setErr(''); setOtp(''); setPendingUser(null)
+    setStep('credentials'); setErr(''); setCode(''); setPendingUser(null); setPendingSecret(null)
   }
 
-  // ── خطوة 3: إدخال رمز التحقق (6 أرقام) ──
-  if (step === 'otp') {
+  // ── خطوة إعداد أول مرة (QR + كود + تأكيد) ──
+  if (step === 'enroll') {
+    return (
+      <TotpEnrollScreen
+        secret={pendingSecret}
+        otpauthUrl={getOtpAuthUrl(pendingSecret, pendingUser.name)}
+        accountName={pendingUser.name}
+        onConfirmed={onEnrollConfirmed}
+        onBack={backToCredentials}
+      />
+    )
+  }
+
+  // ── خطوة إدخال كود التحقق الثنائي (لديه إعداد سابق) ──
+  if (step === 'totp') {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, background: T.primaryGradient }}>
         <div style={{ background: 'white', borderRadius: 28, padding: 30, boxShadow: '0 20px 50px rgba(0,0,0,.2)' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
-            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📧</div>
-            <h1 style={{ fontSize: 17, fontWeight: 900 }}>تحقق برمز الأمان</h1>
-            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أُرسل رمز مكوّن من 6 أرقام إلى {maskEmail(email)}</p>
+            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>🔐</div>
+            <h1 style={{ fontSize: 17, fontWeight: 900 }}>التحقق الثنائي</h1>
+            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>افتح تطبيق المصادقة على هاتفك وأدخل الكود الظاهر حالياً</p>
           </div>
 
           <input
-            ref={otpRef} autoFocus value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            onKeyDown={(e) => e.key === 'Enter' && otp.length === 6 && !otpBusy && submitOtp()}
+            autoFocus value={code} onChange={(e) => { setCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr('') }}
+            onKeyDown={(e) => e.key === 'Enter' && code.length === 6 && !totpBusy && submitTotp()}
             inputMode="numeric" maxLength={6}
             style={{ ...inputStyle, textAlign: 'center', fontSize: 24, letterSpacing: 8, fontWeight: 900, marginBottom: 14 }}
             placeholder="••••••"
@@ -157,46 +152,13 @@ export default function LoginScreen({ onLogin }) {
 
           {err && <div style={{ background: '#FEE2E2', color: T.danger, borderRadius: 12, padding: '11px 14px', fontSize: 13, marginBottom: 14, textAlign: 'center', fontWeight: 600 }}>{err}</div>}
 
-          <button onClick={submitOtp} disabled={otp.length !== 6 || otpBusy}
-            style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5, marginBottom: 10, background: (otp.length !== 6 || otpBusy) ? T.textFaint : T.primaryGradient }}>
-            {otpBusy ? '⏳ جارِ التحقق...' : '✅ تأكيد'}
+          <button onClick={submitTotp} disabled={code.length !== 6 || totpBusy}
+            style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5, marginBottom: 10, background: (code.length !== 6 || totpBusy) ? T.textFaint : T.primaryGradient }}>
+            {totpBusy ? '⏳ جارِ التحقق...' : '✅ تأكيد الدخول'}
           </button>
-
-          <button onClick={() => sendOtpTo(email)} disabled={resendIn > 0}
-            style={{ background: 'none', border: 'none', color: resendIn > 0 ? T.textFaint : T.info, fontSize: 12.5, fontWeight: 700, width: '100%', padding: 8, cursor: resendIn > 0 ? 'default' : 'pointer', fontFamily: 'inherit' }}>
-            {resendIn > 0 ? `إعادة الإرسال بعد ${resendIn} ثانية` : '🔁 إعادة إرسال الرمز'}
-          </button>
-          <button onClick={backToCredentials} style={{ ...buttonGhost, width: '100%', padding: 12, fontSize: 12.5, marginTop: 4 }}>
+          <button onClick={backToCredentials}
+            style={{ background: 'none', border: 'none', color: T.textFaint, fontSize: 12.5, fontWeight: 700, width: '100%', padding: 10, cursor: 'pointer', fontFamily: 'inherit' }}>
             الرجوع لتسجيل الدخول
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // ── خطوة 2 (أول مرة فقط): طلب البريد الإلكتروني لإرسال رمز التحقق ──
-  if (step === 'email') {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, background: T.primaryGradient }}>
-        <div style={{ background: 'white', borderRadius: 28, padding: 30, boxShadow: '0 20px 50px rgba(0,0,0,.2)' }}>
-          <div style={{ textAlign: 'center', marginBottom: 22 }}>
-            <div style={{ width: 64, height: 64, borderRadius: 20, background: T.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 12px' }}>📧</div>
-            <h1 style={{ fontSize: 17, fontWeight: 900 }}>بريدك الإلكتروني</h1>
-            <p style={{ fontSize: 12, color: T.textFaint, marginTop: 4 }}>أول مرة تسجّل دخول — أدخل بريدك لإرسال رمز التحقق مستقبلاً</p>
-          </div>
-
-          <input
-            autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && confirmEmail()}
-            inputMode="email" type="email"
-            style={{ ...inputStyle, marginBottom: 14, textAlign: 'center' }}
-            placeholder="example@naqaa.com"
-          />
-
-          {err && <div style={{ background: '#FEE2E2', color: T.danger, borderRadius: 12, padding: '11px 14px', fontSize: 13, marginBottom: 14, textAlign: 'center', fontWeight: 600 }}>{err}</div>}
-
-          <button onClick={confirmEmail} style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15.5 }}>
-            📤 إرسال رمز التحقق
           </button>
         </div>
       </div>
