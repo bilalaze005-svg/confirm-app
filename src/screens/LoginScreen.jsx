@@ -64,7 +64,7 @@ export default function LoginScreen({ onLogin }) {
       const { data: row, error: fetchErr } = await supabase
         .from('employees')
         .select('totp_secret')
-        .eq('id', emp.emp_id)
+        .eq('user_id', emp.emp_id)
         .single()
       if (fetchErr) throw fetchErr
 
@@ -92,7 +92,7 @@ export default function LoginScreen({ onLogin }) {
       const { error } = await supabase
         .from('employees')
         .update({ totp_secret: pendingSecret })
-        .eq('id', pendingUser.id)
+        .eq('user_id', pendingUser.id)
       if (error) throw error
       onLogin(pendingUser)
     } catch (e) {
@@ -216,4 +216,4 @@ export default function LoginScreen({ onLogin }) {
       </div>
     </div>
   )
-          }
+    }
