@@ -78,8 +78,9 @@ export default function LoginScreen({ onLogin }) {
       }
     } catch (e) {
       console.error('❌ خطأ تسجيل الدخول:', e)
-      const isNetworkError = e?.message?.toLowerCase().includes('fetch') || e?.message?.toLowerCase().includes('network')
-      setErr(isNetworkError ? '📡 تعذّر الاتصال بالخادم — تحقق من الشبكة' : 'حدث خطأ، حاول مجدداً')
+      const detail = e?.message || e?.error_description || e?.hint || JSON.stringify(e)
+      const isNetworkError = detail?.toLowerCase().includes('fetch') || detail?.toLowerCase().includes('network')
+      setErr(isNetworkError ? '📡 تعذّر الاتصال بالخادم — تحقق من الشبكة' : '❌ ' + detail)
     } finally {
       setLoading(false)
     }
@@ -96,7 +97,8 @@ export default function LoginScreen({ onLogin }) {
       onLogin(pendingUser)
     } catch (e) {
       console.error('❌ خطأ حفظ سر التحقق:', e)
-      setErr('تعذّر حفظ إعداد التحقق الثنائي — حاول مجدداً')
+      const detail = e?.message || e?.error_description || e?.hint || JSON.stringify(e)
+      setErr('❌ ' + detail)
       setStep('credentials')
     }
   }
@@ -214,4 +216,4 @@ export default function LoginScreen({ onLogin }) {
       </div>
     </div>
   )
-}
+          }
