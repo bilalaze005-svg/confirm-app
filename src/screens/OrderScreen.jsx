@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase.js'
 import { T, cardStyle, buttonPrimary, buttonGhost, inputStyle } from '../lib/theme.js'
 import PrintButton from '../components/PrintButton.jsx'
 import { getAutoPrint, isConnected, reconnectSavedPrinter, printReceipt } from '../lib/print.js'
+import { applyPromotions } from '../lib/promotions.js'
 
 const LOW_STOCK_THRESHOLD = 5
 
@@ -16,7 +17,13 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   const [searching, setSearching] = useState(true)
   const [completedOrder, setCompletedOrder] = useState(null) // بعد الإرسال بنجاح، نعرض شاشة تأكيد فيها زر طباعة
   const [cartExpanded, setCartExpanded] = useState(false) // السلة تبدأ مطوية كشريط صغير، وتتوسّع فقط عند الضغط عليها
+  const [promos, setPromos] = useState([])
   const requestIdRef = useRef(0)
+
+  useEffect(() => {
+    supabase.from('promotions').select('*').eq('active', true)
+      .then(({ data, error }) => { if (!error) setPromos(data || []) })
+  }, [])
 
   const searchProducts = useCallback(async () => {
     const myRequestId = ++requestIdRef.current
@@ -103,22 +110,33 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
 
   const removeFromCart = (id) => setCart(prev => prev.filter(c => c.product_id !== id))
 
-  const total = cart.reduce((s, c) => s + unitPrice(c) * c.qty, 0)
   const totalItems = cart.reduce((s, c) => s + c.qty, 0)
+
+  // ✅ حساب العروض المطبَّقة على السلة الحالية (bogo/percent/fixed/tier_discount)
+  const promoInput = cart.map(c => ({ id: c.product_id, price: unitPrice(c), qty: c.qty }))
+  const { lines: promoLines, subtotal, promoDiscount, appliedPromoNames, netTotal } = applyPromotions(promoInput, promos)
+  const total = netTotal // ✅ المجموع الفعلي المطلوب من الزبون بعد كل الخصومات
 
   const submitOrder = async () => {
     if (cart.length === 0) { showToast('⚠️ السلة فارغة', true); return }
     if (!isOnline) { showToast('📡 لا يوجد اتصال بالإنترنت — لا يمكن إرسال الطلبية الآن', true); return }
     setSaving(true)
     try {
-      const items = cart.map(c => ({
-        product_id: c.product_id,
-        name: c.name,
-        quantity: c.qty,
-        unit: c.unitMode === 'carton' ? 'carton' : 'unit',
-        price: unitPrice(c),
-        total: unitPrice(c) * c.qty,
-      }))
+      // ✅ نبني عناصر الطلبية من نتيجة applyPromotions (تعكس الكميات المجانية
+      // والقيمة الفعلية المدفوعة لكل سطر بعد كل الخصومات)
+      const items = cart.map((c, i) => {
+        const l = promoLines[i]
+        return {
+          product_id: c.product_id,
+          name: c.name,
+          quantity: c.qty,
+          paid_qty: l.paidQty,
+          free_qty: l.freeQty,
+          unit: c.unitMode === 'carton' ? 'carton' : 'unit',
+          price: unitPrice(c),
+          total: l.lineTotal,
+        }
+      })
       const { error } = await supabase.from('orders').insert({
         customer_name: store.name,
         customer_phone: phone.trim() || null,
@@ -126,6 +144,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
         store_id: store.id,
         items: JSON.stringify(items),
         total,
+        discount: promoDiscount || 0,
         status: 'processing',
         notes: note.trim() || null,
         employee_id: employee.id,
@@ -316,6 +335,13 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
               style={{ ...inputStyle, padding: 11, marginTop: 12, marginBottom: 8, fontSize: 13 }} />
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="📝 ملاحظة للتوصيل (اختياري)"
               style={{ ...inputStyle, padding: 11, marginBottom: 10, fontSize: 13 }} />
+
+            {promoDiscount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 13, marginBottom: 8, color: '#EA580C' }}>
+                <span>🎯 خصم عروض ({appliedPromoNames.join('، ')})</span>
+                <span>-{promoDiscount.toFixed(0)} دج</span>
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 17, marginBottom: 12 }}>
               <span style={{ color: T.textSoft, fontSize: 13, alignSelf: 'center' }}>الإجمالي</span>

@@ -20,7 +20,9 @@ const PRINTER_NAME_KEY = 'nq_confirm_printer_name'
 
 // عرض الطباعة بالنقاط لكل حجم ورق شائع (بدقة 203dpi القياسية لهذه الطابعات)
 export const PAPER_WIDTH_DOTS = { Roll80: 576, Roll58: 384 }
-export const PRINT_FONT_SCALE = { small: 0.8, medium: 1, large: 1.35 }
+// ✅ تكبير عام لكل الأحجام: "الصغير" الجديد ≈ "الكبير" القديم (كان صغيراً
+// فعلياً على الفاتورة الحقيقية)، و"متوسط" و"كبير" أكبر من ذلك بوضوح
+export const PRINT_FONT_SCALE = { small: 1.3, medium: 1.7, large: 2.1 }
 
 export function getPaperSize() { return localStorage.getItem(PAPER_STORAGE_KEY) || 'Roll80' }
 export function setPaperSize(key) { localStorage.setItem(PAPER_STORAGE_KEY, key) }
@@ -72,7 +74,33 @@ async function ensureInitialized() {
 export function isSupported() { return true }
 export function isConnected() { return !!_deviceId && !!_matchedService }
 
+// خدمات GATT قياسية عامة (معلومات الجهاز/البطارية...) لا علاقة لها بالطباعة،
+// نتجاهلها أثناء البحث الاحتياطي حتى لا نحاول الكتابة عليها بالخطأ
+const IGNORED_GENERIC_SERVICES = ['1800', '1801', '180a', '180f']
+
+// بحث احتياطي: لو الطابعة لا تطابق أياً من CANDIDATE_SERVICES المعروفة (شائع
+// مع بعض الطابعات الصينية الرخيصة ذات معرّفات خاصة بالمصنّع)، نفحص كل خدمات
+// الجهاز ونأخذ أول خاصية قابلة للكتابة نجدها، بدل الفشل الكامل
+function findAnyWritableCharacteristic(services) {
+  for (const service of services) {
+    const shortId = service.uuid.slice(4, 8).toLowerCase()
+    if (IGNORED_GENERIC_SERVICES.includes(shortId)) continue
+    for (const char of service.characteristics || []) {
+      if (char.properties?.write || char.properties?.writeWithoutResponse) {
+        return {
+          service: service.uuid, writeChar: char.uuid,
+          useWriteWithoutResponse: !!char.properties.writeWithoutResponse,
+        }
+      }
+    }
+  }
+  return null
+}
+
 async function discoverWritableService(deviceId) {
+  // ✅ على أندرويد 13+، getServices() قد ترجع فاضية أحياناً إلا لو استُدعيت
+  // discoverServices() أولاً (مشكلة معروفة بمكتبة @capacitor-community/bluetooth-le)
+  try { await BleClient.discoverServices(deviceId) } catch { /* بعض الأجهزة لا تحتاجها، نتجاهل الخطأ */ }
   const services = await BleClient.getServices(deviceId)
   for (const candidate of CANDIDATE_SERVICES) {
     const svc = services.find(s => s.uuid.toLowerCase() === candidate.service.toLowerCase())
@@ -81,7 +109,8 @@ async function discoverWritableService(deviceId) {
       return { ...candidate, useWriteWithoutResponse: !!ch.properties.writeWithoutResponse }
     }
   }
-  return null
+  // ✅ لم تُطابَق أي خدمة معروفة — نجرّب البحث الاحتياطي العام قبل الاستسلام
+  return findAnyWritableCharacteristic(services)
 }
 
 // يفتح نافذة اختيار جهاز بلوتوث جديد، يتصل، ويحفظ هويته لإعادة الاتصال تلقائياً لاحقاً
@@ -239,16 +268,34 @@ function canvasToEscposRaster(canvas) {
 
 export async function printTestPage() {
   if (!isConnected()) throw new Error('الطابعة غير متصلة')
+  const widthDots = PAPER_WIDTH_DOTS[getPaperSize()] || 576
   const fontKey = getPrintFontSize()
-  const sizeByte = fontKey === 'large' ? 0x11 : fontKey === 'medium' ? 0x01 : 0x00
+  const scale = PRINT_FONT_SCALE[fontKey] ?? 1
+
+  // ✅ نفس أسلوب الفاتورة بالضبط: النص العربي يُرسل كصورة (raster) وليس
+  // نصاً خاماً — أغلب الطابعات الرخيصة لا تدعم ترميز UTF-8/العربي، فلو
+  // أرسلنا النص مباشرة (كما كان سابقاً) يطبع فاضياً أو رموزاً غريبة حتى
+  // لو الاتصال بالطابعة سليم تماماً، ما يعطي انطباعاً خاطئاً بوجود عطل.
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  const lineHeight = Math.round(26 * scale)
+  const padding = 12
+  canvas.width = widthDots
+  canvas.height = lineHeight * 3 + padding * 2
+
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = '#000'; ctx.direction = 'rtl'; ctx.textAlign = 'center'
+  ctx.font = `bold ${Math.round(20 * scale)}px sans-serif`
+  ctx.fillText('=== اختبار الطباعة ===', canvas.width / 2, padding + lineHeight)
+  ctx.font = `${Math.round(15 * scale)}px sans-serif`
+  ctx.fillText('Test OK 123', canvas.width / 2, padding + lineHeight * 2.2)
+
+  const raster = canvasToEscposRaster(canvas)
   const init = new Uint8Array([0x1b, 0x40])
-  const setSize = new Uint8Array([0x1d, 0x21, sizeByte])
-  const resetSize = new Uint8Array([0x1d, 0x21, 0x00])
-  const text = new TextEncoder().encode('=== اختبار الطباعة ===\nTest OK 123\n\n\n')
+  const feed = new Uint8Array([0x0a, 0x0a, 0x0a])
   await writeBytes(init)
-  await writeBytes(setSize)
-  await writeBytes(text)
-  await writeBytes(resetSize)
+  await writeBytes(raster)
+  await writeBytes(feed)
 }
 
 export async function printReceipt(order) {
