@@ -31,7 +31,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
     try {
       let q = supabase
         .from('products')
-        .select('id,name,price,stock,sku,carton_price,units,image')
+        .select('id,name,price,stock,sku,carton_price,units,image,brand_id')
         .eq('disabled', false)
         .gt('stock', 0)
 
@@ -85,7 +85,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
       }
       return [...prev, {
         product_id: p.id, name: p.name, price: p.price, image: p.image, qty: 1,
-        stock: p.stock, cartonPrice: p.carton_price, units: p.units, unitMode: 'unit',
+        stock: p.stock, cartonPrice: p.carton_price, units: p.units, unitMode: 'unit', brand_id: p.brand_id,
       }]
     })
   }
@@ -113,7 +113,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   const totalItems = cart.reduce((s, c) => s + c.qty, 0)
 
   // ✅ حساب العروض المطبَّقة على السلة الحالية (bogo/percent/fixed/tier_discount)
-  const promoInput = cart.map(c => ({ id: c.product_id, price: unitPrice(c), qty: c.qty }))
+  const promoInput = cart.map(c => ({ id: c.product_id, price: unitPrice(c), qty: c.qty, brand_id: c.brand_id }))
   const { lines: promoLines, subtotal, promoDiscount, appliedPromoNames, netTotal } = applyPromotions(promoInput, promos)
   const total = netTotal // ✅ المجموع الفعلي المطلوب من الزبون بعد كل الخصومات
 
