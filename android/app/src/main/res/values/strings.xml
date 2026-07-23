@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">مندوب المبيعات</string>
-    <string name="title_activity_main">مندوب المبيعات</string>
-    <string name="package_name">com.naqaa.confirmapp</string>
-    <string name="custom_url_scheme">com.naqaa.confirmapp</string>
-</resources>
