@@ -1,61 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { supabase } from '../lib/supabase.js'
+import { useState, useEffect } from 'react'
 import { T, cardStyle, buttonPrimary, buttonGhost, inputStyle } from '../lib/theme.js'
 import PrintButton from '../components/PrintButton.jsx'
-import { getAutoPrint, isConnected, reconnectSavedPrinter, printReceipt } from '../lib/print.js'
-import { applyPromotions } from '../lib/promotions.js'
+import useStoreOrder from '../hooks/useStoreOrder.js'
 
 const LOW_STOCK_THRESHOLD = 5
 
 export default function OrderScreen({ store, employee, onDone, onChangeStore, showToast, isOnline }) {
   const [search, setSearch] = useState('')
-  const [products, setProducts] = useState([])
-  const [cart, setCart] = useState([]) // [{product_id,name,price,qty,image,unitMode,stock}]
   const [phone, setPhone] = useState('')
   const [note, setNote] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [searching, setSearching] = useState(true)
-  const [completedOrder, setCompletedOrder] = useState(null) // بعد الإرسال بنجاح، نعرض شاشة تأكيد فيها زر طباعة
   const [cartExpanded, setCartExpanded] = useState(false) // السلة تبدأ مطوية كشريط صغير، وتتوسّع فقط عند الضغط عليها
-  const [promos, setPromos] = useState([])
-  const requestIdRef = useRef(0)
 
-  useEffect(() => {
-    supabase.from('promotions').select('*').eq('active', true)
-      .then(({ data, error }) => { if (!error) setPromos(data || []) })
-  }, [])
-
-  const searchProducts = useCallback(async () => {
-    const myRequestId = ++requestIdRef.current
-    setSearching(true)
-    try {
-      let q = supabase
-        .from('products')
-        .select('id,name,price,stock,sku,carton_price,units,image,brand_id')
-        .eq('disabled', false)
-        .gt('stock', 0)
-
-      if (search.trim()) {
-        const like = `%${search.trim()}%`
-        q = q.or(`name.ilike.${like},sku.ilike.${like}`)
-      }
-
-      const { data, error } = await q.order(search.trim() ? 'name' : 'created_at', { ascending: !!search.trim() }).limit(30)
-      if (error) throw error
-      if (myRequestId !== requestIdRef.current) return // نتيجة بحث قديمة وصلت متأخرة — نتجاهلها
-      setProducts(data || [])
-    } catch (e) {
-      console.error('❌ خطأ البحث:', e)
-      if (myRequestId === requestIdRef.current) showToast('❌ تعذّر تحميل المنتجات', true)
-    } finally {
-      if (myRequestId === requestIdRef.current) setSearching(false)
-    }
-  }, [search, showToast])
-
-  useEffect(() => {
-    const t = setTimeout(searchProducts, 350)
-    return () => clearTimeout(t)
-  }, [searchProducts])
+  const {
+    products, cart, saving, searching, completedOrder, setCompletedOrder,
+    subtotal, promoDiscount, appliedPromoNames, total, totalItems,
+    unitPrice, addToCart, cartQtyFor, updateQty, toggleUnitMode, removeFromCart, submitOrder,
+  } = useStoreOrder({ store, employee, showToast, isOnline, search })
 
   // تحذير قبل مغادرة الصفحة (تحديث/إغلاق) لو فيه عناصر بالسلة لم تُرسل بعد
   useEffect(() => {
@@ -66,117 +26,9 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
     return () => window.removeEventListener('beforeunload', handler)
   }, [cart.length])
 
-  // الوحدة الفعلية للسعر: بالكرتون لو المنتج يدعم ذلك ووُضعت في السلة كذلك
-  const unitPrice = (item) => (item.unitMode === 'carton' && item.cartonPrice ? item.cartonPrice : item.price)
-
-  const addToCart = (p) => {
-    setCart(prev => {
-      const existing = prev.find(c => c.product_id === p.id)
-      if (existing) {
-        if (typeof p.stock === 'number' && existing.qty >= p.stock) {
-          showToast(`⚠️ الكمية المتوفرة من "${p.name}" محدودة بـ ${p.stock}`, true)
-          return prev
-        }
-        return prev.map(c => c.product_id === p.id ? { ...c, qty: c.qty + 1 } : c)
-      }
-      if (typeof p.stock === 'number' && p.stock <= 0) {
-        showToast(`⚠️ "${p.name}" غير متوفر بالمخزون حالياً`, true)
-        return prev
-      }
-      return [...prev, {
-        product_id: p.id, name: p.name, price: p.price, image: p.image, qty: 1,
-        stock: p.stock, cartonPrice: p.carton_price, units: p.units, unitMode: 'unit', brand_id: p.brand_id,
-      }]
-    })
-  }
-
-  const cartQtyFor = (id) => cart.find(c => c.product_id === id)?.qty || 0
-
-  const updateQty = (id, delta) => {
-    setCart(prev => prev.map(c => {
-      if (c.product_id !== id) return c
-      const next = c.qty + delta
-      if (delta > 0 && typeof c.stock === 'number' && c.unitMode === 'unit' && next > c.stock) {
-        showToast(`⚠️ الحد الأقصى المتوفر ${c.stock}`, true)
-        return c
-      }
-      return { ...c, qty: Math.max(1, next) }
-    }))
-  }
-
-  const toggleUnitMode = (id) => {
-    setCart(prev => prev.map(c => c.product_id === id ? { ...c, unitMode: c.unitMode === 'carton' ? 'unit' : 'carton', qty: 1 } : c))
-  }
-
-  const removeFromCart = (id) => setCart(prev => prev.filter(c => c.product_id !== id))
-
-  const totalItems = cart.reduce((s, c) => s + c.qty, 0)
-
-  // ✅ حساب العروض المطبَّقة على السلة الحالية (bogo/percent/fixed/tier_discount)
-  const promoInput = cart.map(c => ({ id: c.product_id, price: unitPrice(c), qty: c.qty, brand_id: c.brand_id }))
-  const { lines: promoLines, subtotal, promoDiscount, appliedPromoNames, netTotal } = applyPromotions(promoInput, promos)
-  const total = netTotal // ✅ المجموع الفعلي المطلوب من الزبون بعد كل الخصومات
-
-  const submitOrder = async () => {
-    if (cart.length === 0) { showToast('⚠️ السلة فارغة', true); return }
-    if (!isOnline) { showToast('📡 لا يوجد اتصال بالإنترنت — لا يمكن إرسال الطلبية الآن', true); return }
-    setSaving(true)
-    try {
-      // ✅ نبني عناصر الطلبية من نتيجة applyPromotions (تعكس الكميات المجانية
-      // والقيمة الفعلية المدفوعة لكل سطر بعد كل الخصومات)
-      const items = cart.map((c, i) => {
-        const l = promoLines[i]
-        return {
-          product_id: c.product_id,
-          name: c.name,
-          quantity: c.qty,
-          paid_qty: l.paidQty,
-          free_qty: l.freeQty,
-          unit: c.unitMode === 'carton' ? 'carton' : 'unit',
-          price: unitPrice(c),
-          total: l.lineTotal,
-        }
-      })
-      const { error } = await supabase.from('orders').insert({
-        customer_name: store.name,
-        customer_phone: phone.trim() || null,
-        customer_address: store.address || null,
-        store_id: store.id,
-        items: JSON.stringify(items),
-        total,
-        discount: promoDiscount || 0,
-        status: 'processing',
-        notes: note.trim() || null,
-        employee_id: employee.id,
-        created_at: new Date().toISOString(),
-      })
-      if (error) throw error
-      showToast(`✅ تم تسجيل طلبية "${store.name}" بقيمة ${total.toFixed(0)} دج`)
-      const newOrder = {
-        storeName: store.name,
-        address: store.address,
-        items,
-        total,
-        employeeName: employee.name,
-        dateStr: new Date().toLocaleString('ar'),
-      }
-      setCompletedOrder(newOrder)
-      // ✅ طباعة تلقائية بعد كل بيع (إعداد اختياري بشاشة إعدادات الطباعة)
-      if (getAutoPrint()) {
-        try {
-          if (!isConnected()) await reconnectSavedPrinter()
-          if (isConnected()) { await printReceipt(newOrder); showToast('🖨️ طُبعت الفاتورة تلقائياً') }
-        } catch (e) {
-          console.error('❌ خطأ الطباعة التلقائية:', e)
-        }
-      }
-      setCart([]); setPhone(''); setNote('')
-    } catch (e) {
-      console.error('❌ خطأ إرسال الطلبية:', e)
-      showToast('❌ ' + (e.message || 'فشل إرسال الطلبية'), true)
-    } finally {
-      setSaving(false)
-    }
+  const handleSubmitOrder = async () => {
+    const ok = await submitOrder({ phone, note })
+    if (ok) { setPhone(''); setNote('') }
   }
 
   const handleChangeStore = () => {
@@ -348,7 +200,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
               <span style={{ color: T.primary }}>{total.toFixed(0)} دج</span>
             </div>
 
-            <button disabled={saving} onClick={submitOrder}
+            <button disabled={saving} onClick={handleSubmitOrder}
               style={{ ...buttonPrimary, width: '100%', padding: 15, fontSize: 15, background: saving ? T.textFaint : T.primaryGradient }}>
               {saving ? '⏳ جارِ الإرسال...' : '✅ إرسال الطلبية'}
             </button>

@@ -1,82 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { supabase } from '../lib/supabase.js'
+import { useState } from 'react'
 import QrScanner from '../components/QrScanner.jsx'
 import { T, cardStyle, buttonPrimary, inputStyle } from '../lib/theme.js'
 import { distanceKm, formatDistance, geoErrorMessage } from '../lib/geo.js'
-
-const RECENT_KEY = 'nq_confirm_recent_stores'
-const MAX_RECENT = 5
-
-function getRecentStores() {
-  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') } catch { return [] }
-}
-
-function pushRecentStore(store) {
-  try {
-    const list = getRecentStores().filter(s => s.id !== store.id)
-    list.unshift({ id: store.id, name: store.name, address: store.address, qr_token: store.qr_token })
-    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, MAX_RECENT)))
-  } catch { /* localStorage قد يكون ممتلئ أو معطّل — لا داعي لمقاطعة الموظف بسبب هذا */ }
-}
+import useStoreSearch from '../hooks/useStoreSearch.js'
 
 export default function StoreSelectScreen({ onStoreSelected, onNewStore, showToast, isOnline }) {
   const [showScanner, setShowScanner] = useState(false)
   const [search, setSearch] = useState('')
-  const [results, setResults] = useState([])
-  const [searching, setSearching] = useState(false)
-  const [recent, setRecent] = useState(getRecentStores)
   const [myLocation, setMyLocation] = useState(null)
   const [locating, setLocating] = useState(false)
-  const requestIdRef = useRef(0)
 
-  const searchStores = useCallback(async () => {
-    if (!search.trim()) { setResults([]); return }
-    const myRequestId = ++requestIdRef.current
-    setSearching(true)
-    try {
-      const { data, error } = await supabase
-        .from('stores')
-        .select('id,name,address,qr_token,lat,lng')
-        .eq('active', true)
-        .ilike('name', `%${search.trim()}%`)
-        .order('name')
-        .limit(15)
-      if (error) throw error
-      // نتجاهل النتيجة لو صار بحث أحدث بعدها (يمنع ظهور نتائج قديمة متأخرة الوصول)
-      if (myRequestId !== requestIdRef.current) return
-      setResults(data || [])
-    } catch (e) {
-      console.error('❌ خطأ البحث عن المحلات:', e)
-      if (myRequestId === requestIdRef.current) {
-        showToast('❌ تعذّر البحث عن المحلات — تحقق من الاتصال', true)
-      }
-    } finally {
-      if (myRequestId === requestIdRef.current) setSearching(false)
-    }
-  }, [search, showToast])
+  const { results, searching, recent, handleSelect, handleScan } =
+    useStoreSearch({ search, showToast, isOnline, onStoreSelected })
 
-  useEffect(() => {
-    const t = setTimeout(searchStores, 350)
-    return () => clearTimeout(t)
-  }, [searchStores])
-
-  const handleSelect = (store) => {
-    pushRecentStore(store)
-    onStoreSelected(store)
-  }
-
-  const handleScan = async (text) => {
+  const handleScanAndClose = async (text) => {
     setShowScanner(false)
-    if (!isOnline) { showToast('📡 لا يوجد اتصال بالإنترنت', true); return }
-    try {
-      const { data, error } = await supabase.from('stores').select('id,name,address,qr_token,lat,lng').eq('qr_token', text).eq('active', true).maybeSingle()
-      if (error) throw error
-      if (!data) { showToast('❌ رمز QR غير معروف أو المحل غير نشط', true); return }
-      handleSelect(data)
-    } catch (e) {
-      console.error('❌ خطأ فحص QR:', e)
-      showToast('❌ تعذّر التحقق من الرمز', true)
-    }
+    await handleScan(text)
   }
 
   const locateMe = () => {
@@ -173,7 +112,7 @@ export default function StoreSelectScreen({ onStoreSelected, onNewStore, showToa
         🆕 تسجيل محل جديد
       </button>
 
-      {showScanner && <QrScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+      {showScanner && <QrScanner onScan={handleScanAndClose} onClose={() => setShowScanner(false)} />}
     </div>
   )
 }
