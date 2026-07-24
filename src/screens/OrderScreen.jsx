@@ -14,7 +14,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
   const {
     products, cart, saving, searching, completedOrder, setCompletedOrder,
     subtotal, promoDiscount, appliedPromoNames, total, totalItems,
-    unitPrice, addToCart, cartQtyFor, updateQty, toggleUnitMode, removeFromCart, submitOrder,
+    unitPrice, addToCart, cartQtyFor, updateQty, removeFromCart, submitOrder,
   } = useStoreOrder({ store, employee, showToast, isOnline, search })
 
   // تحذير قبل مغادرة الصفحة (تحديث/إغلاق) لو فيه عناصر بالسلة لم تُرسل بعد
@@ -120,12 +120,14 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
               <div style={{ padding: '10px 12px 12px' }}>
                 <div style={{ fontWeight: 800, fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: T.text }}>{p.name}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                  <span style={{ fontWeight: 900, fontSize: 14, color: T.primary }}>{p.price} <span style={{ fontSize: 10, fontWeight: 700 }}>دج</span></span>
+                  <span style={{ fontWeight: 900, fontSize: 14, color: T.primary }}>{p.carton_price || p.price} <span style={{ fontSize: 10, fontWeight: 700 }}>دج</span></span>
                   {!outOfStock && <span style={{ background: T.primaryLight, color: T.primary, borderRadius: '50%', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 900 }}>+</span>}
                 </div>
                 {p.carton_price ? (
-                  <div style={{ fontSize: 10, color: T.textFaint, marginTop: 3 }}>🧃 الكرتون: {p.carton_price} دج{p.units ? ` (${p.units} وحدة)` : ''}</div>
-                ) : null}
+                  <div style={{ fontSize: 10, color: T.primary, marginTop: 3, fontWeight: 800 }}>🧃 يُباع بالكرتون{p.units ? ` (${p.units} وحدة) — ` : ' — '}{p.carton_price} دج</div>
+                ) : (
+                  <div style={{ fontSize: 10, color: T.textFaint, marginTop: 3 }}>يُباع بالقطعة</div>
+                )}
               </div>
             </button>
           )
@@ -157,7 +159,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
             <button onClick={() => setCartExpanded(false)} aria-label="طي السلة"
               style={{ width: 40, height: 4, background: T.border, borderRadius: 4, margin: '0 auto 14px', display: 'block', border: 'none', padding: 12, cursor: 'pointer' }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div style={{ fontWeight: 900, fontSize: 15 }}>🧾 طلبية {store.name} ({totalItems} قطعة)</div>
+              <div style={{ fontWeight: 900, fontSize: 15 }}>🧾 طلبية {store.name} ({totalItems} صنف)</div>
               <button onClick={() => setCartExpanded(false)} style={{ background: T.bg, border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: 13, color: T.textFaint }}>✕</button>
             </div>
             {cart.map(c => (
@@ -175,11 +177,9 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
                 <span style={{ fontSize: 12, fontWeight: 800, color: T.primary, minWidth: 55, textAlign: 'left' }}>{(unitPrice(c) * c.qty).toFixed(0)} دج</span>
                 <button onClick={() => removeFromCart(c.product_id)} style={{ background: '#FEE2E2', color: T.danger, border: 'none', borderRadius: T.radiusSm, width: 26, height: 26, cursor: 'pointer', fontWeight: 700 }}>✕</button>
               </div>
-              {c.cartonPrice ? (
-                <button onClick={() => toggleUnitMode(c.product_id)} style={{ background: 'none', border: 'none', color: T.info, fontSize: 10.5, fontWeight: 700, padding: '4px 42px 0 0', cursor: 'pointer', fontFamily: 'inherit' }}>
-                  {c.unitMode === 'carton' ? '🧃 بالكرتون — اضغط للتحويل للوحدة' : '🔄 حوّل إلى بيع بالكرتون'}
-                </button>
-              ) : null}
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: c.unitMode === 'carton' ? T.primary : T.textFaint, padding: '4px 42px 0 0' }}>
+                {c.unitMode === 'carton' ? `🧃 بالكرتون${c.units ? ` (${c.units} وحدة/كرتون)` : ''}` : '🔹 بالقطعة'}
+              </div>
             </div>
             ))}
 
