@@ -138,7 +138,7 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
 
       {cart.length > 0 && !cartExpanded && (
         <button onClick={() => setCartExpanded(true)}
-          style={{ position: 'fixed', bottom: 16, right: 16, left: 16, maxWidth: 468, margin: '0 auto', background: T.primaryGradient, color: 'white', border: 'none', borderRadius: T.radiusPill, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 8px 24px rgba(124,58,237,.35)', cursor: 'pointer', fontFamily: 'inherit' }}>
+          style={{ position: 'fixed', bottom: 80, right: 16, left: 16, maxWidth: 468, margin: '0 auto', background: T.primaryGradient, color: 'white', border: 'none', borderRadius: T.radiusPill, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 8px 24px rgba(124,58,237,.35)', cursor: 'pointer', fontFamily: 'inherit', zIndex: 45 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 13.5 }}>
             <span style={{ background: 'rgba(255,255,255,.25)', borderRadius: '50%', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>{totalItems}</span>
             🧾 عرض السلة
@@ -151,9 +151,9 @@ export default function OrderScreen({ store, employee, onDone, onChangeStore, sh
         <>
           {/* خلفية شفافة: الضغط خارج اللوحة يطويها بدل حذف أي بيانات */}
           <div onClick={() => setCartExpanded(false)}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.35)', zIndex: 40 }} />
+            style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.35)', zIndex: 46 }} />
 
-          <div style={{ position: 'fixed', bottom: 0, right: 0, left: 0, maxWidth: 500, margin: '0 auto', background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -8px 30px rgba(15,23,42,.12)', padding: 18, maxHeight: '75vh', overflowY: 'auto', zIndex: 41 }}>
+          <div style={{ position: 'fixed', bottom: 0, right: 0, left: 0, maxWidth: 500, margin: '0 auto', background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -8px 30px rgba(15,23,42,.12)', padding: 18, maxHeight: '75vh', overflowY: 'auto', zIndex: 47 }}>
             <button onClick={() => setCartExpanded(false)} aria-label="طي السلة"
               style={{ width: 40, height: 4, background: T.border, borderRadius: 4, margin: '0 auto 14px', display: 'block', border: 'none', padding: 12, cursor: 'pointer' }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
