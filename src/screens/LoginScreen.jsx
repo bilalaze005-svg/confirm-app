@@ -1,18 +1,20 @@
 import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { T, buttonPrimary, inputStyle } from '../lib/theme.js'
-import { generateSecret, getOtpAuthUrl, verifyCode } from '../lib/totp.js'
+import { getOtpAuthUrl } from '../lib/totp.js'
 import TotpEnrollScreen from './TotpEnrollScreen.jsx'
 
 /**
  * @file LoginScreen.jsx
- * @description تسجيل دخول موظف تأكيد الطلبات على خطوتين:
+ * @description تسجيل دخول موظف تأكيد الطلبات بجلسة Supabase Auth حقيقية (aal2):
  *   1) بريد/كلمة مرور عبر verify_employee_login (كما كانت)
- *   2) تحقق ثنائي TOTP حقيقي (Google Authenticator) — راجع lib/totp.js
- *      و TotpEnrollScreen.jsx للتفاصيل.
+ *   2) جلسة Auth حقيقية (signInWithPassword/signUp تلقائي أول مرة)
+ *   3) MFA حقيقي من Supabase (auth.mfa) — نفس واجهة QR القديمة، مربوطة
+ *      الآن بعامل TOTP حقيقي يرفع الجلسة فعلياً لـaal2.
  */
 export default function LoginScreen({ onLogin }) {
-  const [step, setStep] = useState('credentials') // credentials | enroll | totp
+  // step: credentials | resync | enroll | totp
+  const [step, setStep] = useState('credentials')
   const [login, setLogin] = useState('')
   const [pass, setPass] = useState('')
   const [showPass, setShowPass] = useState(false)
@@ -21,11 +23,40 @@ export default function LoginScreen({ onLogin }) {
   const passRef = useRef(null)
 
   const [pendingUser, setPendingUser] = useState(null)
-  const [pendingSecret, setPendingSecret] = useState(null) // سر جديد لم يُحفظ بعد (أول إعداد)
+  const [pendingSecret, setPendingSecret] = useState(null)
+  const [pendingFactorId, setPendingFactorId] = useState(null)
+  const [pendingRealEmail, setPendingRealEmail] = useState(null)
+  const [pendingPass, setPendingPass] = useState(null)
   const [code, setCode] = useState('')
   const [totpBusy, setTotpBusy] = useState(false)
 
   const canSubmit = login.trim() && pass && !loading
+
+  const proceedToMfa = async (sessionUser) => {
+    try {
+      const { data, error } = await supabase.auth.mfa.listFactors()
+      if (error) throw error
+      const verifiedTotp = (data?.totp || []).find(f => f.status === 'verified')
+
+      if (verifiedTotp) {
+        setPendingFactorId(verifiedTotp.id)
+        setStep('totp')
+      } else {
+        const { data: enroll, error: enrollErr } = await supabase.auth.mfa.enroll({
+          factorType: 'totp',
+          friendlyName: `naqaa-confirm-${sessionUser.id}`,
+        })
+        if (enrollErr) throw enrollErr
+        setPendingFactorId(enroll.id)
+        setPendingSecret(enroll.totp.secret)
+        setStep('enroll')
+      }
+    } catch (e) {
+      console.error('❌ خطأ تجهيز التحقق الثنائي:', e)
+      setErr('تعذّر تجهيز التحقق الثنائي، حاول مجدداً')
+    }
+    setLoading(false)
+  }
 
   const submit = async () => {
     if (!login.trim() || !pass) { setErr('أدخل البريد/الاسم وكلمة المرور'); return }
@@ -60,64 +91,86 @@ export default function LoginScreen({ onLogin }) {
       const sessionUser = { id: emp.emp_id, name: emp.emp_name }
       setPendingUser(sessionUser)
 
-      // ✅ نجلب سر TOTP المحفوظ (إن وُجد) للتحقق من وجود إعداد سابق
-      const { data: row, error: fetchErr } = await supabase
-        .from('employees')
-        .select('totp_secret')
-        .eq('user_id', emp.emp_id)
-        .single()
-      if (fetchErr) throw fetchErr
-
-      if (row?.totp_secret) {
-        setPendingSecret(row.totp_secret)
-        setStep('totp') // عنده إعداد سابق — نطلب الكود مباشرة
-      } else {
-        const newSecret = generateSecret()
-        setPendingSecret(newSecret)
-        setStep('enroll') // أول مرة — نعرض شاشة الإعداد (QR + كود)
+      const realEmail = emp.emp_email || (login.trim().includes('@') ? login.trim() : null)
+      if (!realEmail) {
+        setErr('حسابك بلا بريد إلكتروني مسجّل — لازم لتفعيل الدخول الآمن، تواصل مع الإدارة')
+        setLoading(false)
+        return
       }
+
+      let { error: signInErr } = await supabase.auth.signInWithPassword({ email: realEmail, password: pass })
+
+      if (signInErr) {
+        const { error: signUpErr } = await supabase.auth.signUp({ email: realEmail, password: pass })
+
+        if (!signUpErr) {
+          const retry = await supabase.auth.signInWithPassword({ email: realEmail, password: pass })
+          if (retry.error) throw retry.error
+        } else if (signUpErr.message?.toLowerCase().includes('already') || signUpErr.status === 422) {
+          setErr('⚠️ حسابك يحتاج إعادة ضبط من الإدارة — تواصل معهم لإعادة تفعيل الدخول')
+          setLoading(false)
+          return
+        } else {
+          console.error('❌ خطأ إنشاء حساب Auth حقيقي:', signUpErr)
+          setErr('تعذّر إعداد جلسة آمنة — تأكد أن "Confirm email" مُعطَّل بإعدادات Supabase')
+          setLoading(false)
+          return
+        }
+      }
+
+      await proceedToMfa(sessionUser)
     } catch (e) {
       console.error('❌ خطأ تسجيل الدخول:', e)
       const detail = e?.message || e?.error_description || e?.hint || JSON.stringify(e)
       const isNetworkError = detail?.toLowerCase().includes('fetch') || detail?.toLowerCase().includes('network')
       setErr(isNetworkError ? '📡 تعذّر الاتصال بالخادم — تحقق من الشبكة' : '❌ ' + detail)
-    } finally {
       setLoading(false)
     }
   }
 
-  // بعد تأكيد الإعداد الأول (من TotpEnrollScreen)، نحفظ السر بقاعدة البيانات وندخل مباشرة
-  const onEnrollConfirmed = async () => {
+  const onEnrollConfirmed = async (enteredCode) => {
     try {
-      const { error } = await supabase
-        .from('employees')
-        .update({ totp_secret: pendingSecret })
-        .eq('user_id', pendingUser.id)
-      if (error) throw error
+      const { data: challenge, error: challengeErr } = await supabase.auth.mfa.challenge({ factorId: pendingFactorId })
+      if (challengeErr) throw challengeErr
+      const { error: verifyErr } = await supabase.auth.mfa.verify({
+        factorId: pendingFactorId, challengeId: challenge.id, code: enteredCode,
+      })
+      if (verifyErr) return false
       onLogin(pendingUser)
+      return true
     } catch (e) {
-      console.error('❌ خطأ حفظ سر التحقق:', e)
-      const detail = e?.message || e?.error_description || e?.hint || JSON.stringify(e)
-      setErr('❌ ' + detail)
-      setStep('credentials')
+      console.error('❌ خطأ حفظ التحقق الثنائي:', e)
+      return false
     }
   }
 
-  const submitTotp = () => {
+  const submitTotp = async () => {
     if (code.trim().length !== 6) { setErr('أدخل الكود المكوّن من 6 أرقام'); return }
     setTotpBusy(true)
     setErr('')
-    const ok = verifyCode(pendingSecret, code)
-    if (!ok) {
-      setErr('❌ الكود غير صحيح — تأكد من الوقت بهاتفك وحاول مجدداً')
+    try {
+      const { data: challenge, error: challengeErr } = await supabase.auth.mfa.challenge({ factorId: pendingFactorId })
+      if (challengeErr) throw challengeErr
+      const { error: verifyErr } = await supabase.auth.mfa.verify({
+        factorId: pendingFactorId, challengeId: challenge.id, code: code.trim(),
+      })
+      if (verifyErr) {
+        setErr('❌ الكود غير صحيح — تأكد من الوقت بهاتفك وحاول مجدداً')
+        setTotpBusy(false)
+        return
+      }
+      onLogin(pendingUser)
+    } catch (e) {
+      console.error('❌ خطأ التحقق الثنائي:', e)
+      setErr('خطأ في الاتصال، حاول مجدداً')
       setTotpBusy(false)
-      return
     }
-    onLogin(pendingUser)
   }
 
   const backToCredentials = () => {
-    setStep('credentials'); setErr(''); setCode(''); setPendingUser(null); setPendingSecret(null)
+    setStep('credentials'); setErr(''); setCode('')
+    setPendingUser(null); setPendingSecret(null); setPendingFactorId(null)
+    setPendingRealEmail(null); setPendingPass(null)
   }
 
   // ── خطوة إعداد أول مرة (QR + كود + تأكيد) ──
