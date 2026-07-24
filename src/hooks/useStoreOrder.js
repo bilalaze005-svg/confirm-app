@@ -75,9 +75,14 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
   // الوحدة الفعلية للسعر: بالكرتون لو المنتج يدعم ذلك ووُضعت في السلة كذلك
   const unitPrice = (item) => (item.unitMode === 'carton' && item.cartonPrice ? item.cartonPrice : item.price)
 
+  // ✅ مهم: حقل stock في جدول products مُخزَّن دائماً بوحدة "الكرتون"
+  // (نفس اصطلاح لوحة الإدارة كاملة — راجع POS.jsx وPurchases.jsx)، وليس
+  // بالقطعة. لذلك: وضع الكرتون يقارن مباشرة بلا أي تحويل، ووضع القطعة
+  // (الاستثناء) يحوّل مخزون الكراتين لعدد القطع المكافئ بالضرب في units.
   const maxQtyFor = (item) => {
-    if (item.unitMode === 'carton' && item.units) return Math.floor((item.stock ?? Infinity) / item.units) || 0
-    return item.stock
+    if (typeof item.stock !== 'number') return Infinity
+    if (item.unitMode === 'carton') return item.stock
+    return item.stock * (item.units || 1)
   }
 
   const addToCart = (p) => {
