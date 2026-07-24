@@ -42,6 +42,15 @@ export default function LoginScreen({ onLogin }) {
         setPendingFactorId(verifiedTotp.id)
         setStep('totp')
       } else {
+        // ⚠️ نزيل أي عامل TOTP سابق غير مُفعَّل (من محاولة إعداد لم تكتمل) قبل
+        // إنشاء عامل جديد — وإلا يرفض Supabase الطلب بخطأ mfa_factor_name_conflict
+        // لأن الاسم (friendlyName) محجوز مسبقاً بعامل معلّق.
+        const staleTotp = (data?.totp || []).filter(f => f.status !== 'verified')
+        for (const stale of staleTotp) {
+          try { await supabase.auth.mfa.unenroll({ factorId: stale.id }) }
+          catch (unenrollErr) { console.warn('⚠️ تعذّر إزالة عامل معلّق قديم:', unenrollErr) }
+        }
+
         const { data: enroll, error: enrollErr } = await supabase.auth.mfa.enroll({
           factorType: 'totp',
           friendlyName: `naqaa-confirm-${sessionUser.id}`,
