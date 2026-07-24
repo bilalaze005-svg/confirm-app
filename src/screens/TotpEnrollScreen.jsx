@@ -26,11 +26,18 @@ export default function TotpEnrollScreen({ secret, otpauthUrl, accountName, onCo
     }
   }
 
-  const confirm = () => {
+  const [busy, setBusy] = useState(false)
+
+  const confirm = async () => {
     if (code.trim().length !== 6) { setErr('أدخل الكود المكوّن من 6 أرقام الظاهر بتطبيق المصادقة'); return }
     if (!verifyCode(secret, code)) { setErr('❌ الكود غير صحيح — تأكد من مسح QR الصحيح أو أعد المحاولة'); return }
     setErr('')
-    onConfirmed()
+    setBusy(true)
+    const ok = await onConfirmed(code)
+    if (!ok) {
+      setErr('❌ تعذّر تأكيد الكود من الخادم — تأكد من الوقت بهاتفك وحاول مجدداً')
+      setBusy(false)
+    }
   }
 
   return (
@@ -79,9 +86,9 @@ export default function TotpEnrollScreen({ secret, otpauthUrl, accountName, onCo
 
         {err && <div style={{ background: '#FEE2E2', color: T.danger, borderRadius: 12, padding: '11px 14px', fontSize: 12.5, marginBottom: 14, textAlign: 'center', fontWeight: 600 }}>{err}</div>}
 
-        <button onClick={confirm} disabled={code.length !== 6}
-          style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15, marginBottom: 10, background: code.length !== 6 ? T.textFaint : T.primaryGradient }}>
-          ✅ تأكيد وحفظ
+        <button onClick={confirm} disabled={code.length !== 6 || busy}
+          style={{ ...buttonPrimary, width: '100%', padding: 16, fontSize: 15, marginBottom: 10, background: (code.length !== 6 || busy) ? T.textFaint : T.primaryGradient }}>
+          {busy ? '⏳ جارِ التحقق...' : '✅ تأكيد وحفظ'}
         </button>
         <button onClick={onBack} style={{ ...buttonGhost, width: '100%', padding: 12, fontSize: 12.5 }}>
           ← رجوع
