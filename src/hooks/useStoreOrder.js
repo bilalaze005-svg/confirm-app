@@ -75,12 +75,20 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
   // الوحدة الفعلية للسعر: بالكرتون لو المنتج يدعم ذلك ووُضعت في السلة كذلك
   const unitPrice = (item) => (item.unitMode === 'carton' && item.cartonPrice ? item.cartonPrice : item.price)
 
+  const maxQtyFor = (item) => {
+    if (item.unitMode === 'carton' && item.units) return Math.floor((item.stock ?? Infinity) / item.units) || 0
+    return item.stock
+  }
+
   const addToCart = (p) => {
     setCart((prev) => {
       const existing = prev.find((c) => c.product_id === p.id)
       if (existing) {
-        if (typeof p.stock === 'number' && existing.qty >= p.stock) {
-          showToast(`⚠️ الكمية المتوفرة من "${p.name}" محدودة بـ ${p.stock}`, true)
+        const max = maxQtyFor(existing)
+        if (typeof max === 'number' && existing.qty >= max) {
+          showToast(existing.unitMode === 'carton'
+            ? `⚠️ أقصى كمية متوفرة من "${p.name}" هي ${max} كرتون`
+            : `⚠️ الكمية المتوفرة من "${p.name}" محدودة بـ ${p.stock}`, true)
           return prev
         }
         return prev.map((c) => c.product_id === p.id ? { ...c, qty: c.qty + 1 } : c)
@@ -91,7 +99,10 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
       }
       return [...prev, {
         product_id: p.id, name: p.name, price: p.price, image: p.image, qty: 1,
-        stock: p.stock, cartonPrice: p.carton_price, units: p.units, unitMode: 'unit', brand_id: p.brand_id,
+        // ✅ بيع بالكرتون فقط: أي منتج له سعر كرتون يُضاف مباشرة بوضع الكرتون،
+        // وما عنده سعر كرتون (استثناء) يبقى بالقطعة لأنه لا يوجد خيار آخر
+        stock: p.stock, cartonPrice: p.carton_price, units: p.units,
+        unitMode: p.carton_price ? 'carton' : 'unit', brand_id: p.brand_id,
       }]
     })
   }
@@ -102,16 +113,13 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
     setCart((prev) => prev.map((c) => {
       if (c.product_id !== id) return c
       const next = c.qty + delta
-      if (delta > 0 && typeof c.stock === 'number' && c.unitMode === 'unit' && next > c.stock) {
-        showToast(`⚠️ الحد الأقصى المتوفر ${c.stock}`, true)
+      const max = maxQtyFor(c)
+      if (delta > 0 && typeof max === 'number' && next > max) {
+        showToast(c.unitMode === 'carton' ? `⚠️ الحد الأقصى المتوفر ${max} كرتون` : `⚠️ الحد الأقصى المتوفر ${max}`, true)
         return c
       }
       return { ...c, qty: Math.max(1, next) }
     }))
-  }
-
-  const toggleUnitMode = (id) => {
-    setCart((prev) => prev.map((c) => c.product_id === id ? { ...c, unitMode: c.unitMode === 'carton' ? 'unit' : 'carton', qty: 1 } : c))
   }
 
   const removeFromCart = (id) => setCart((prev) => prev.filter((c) => c.product_id !== id))
@@ -190,6 +198,6 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
   return {
     products, cart, saving, searching, completedOrder, setCompletedOrder,
     subtotal, promoDiscount, appliedPromoNames, total, totalItems,
-    unitPrice, addToCart, cartQtyFor, updateQty, toggleUnitMode, removeFromCart, submitOrder,
+    unitPrice, addToCart, cartQtyFor, updateQty, removeFromCart, submitOrder,
   }
 }
