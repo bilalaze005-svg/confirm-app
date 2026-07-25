@@ -127,6 +127,19 @@ export default function LoginScreen({ onLogin }) {
         }
       }
 
+      // ✅ ربط الجلسة الحقيقية بمعرّف الموظف (مرة واحدة فقط) — يسمح لاحقاً
+      // لـsubmit_store_order بالتحقق أن الجلسة تطابق فعلاً الموظف، بدل
+      // الثقة بمعامل من العميل.
+      const { error: linkErr } = await supabase.rpc('link_my_employee_account', {
+        p_employee_id: sessionUser.id,
+      })
+      if (linkErr) {
+        console.error('❌ خطأ ربط الحساب:', linkErr)
+        setErr('تعذّر تأمين الجلسة — تواصل مع المطوّر')
+        setLoading(false)
+        return
+      }
+
       await proceedToMfa(sessionUser)
     } catch (e) {
       console.error('❌ خطأ تسجيل الدخول:', e)
