@@ -141,41 +141,31 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
     if (!isOnline) { showToast('📡 لا يوجد اتصال بالإنترنت — لا يمكن إرسال الطلبية الآن', true); return }
     setSaving(true)
     try {
-      // ✅ نبني عناصر الطلبية من نتيجة applyPromotions (تعكس الكميات المجانية
-      // والقيمة الفعلية المدفوعة لكل سطر بعد كل الخصومات)
-      const items = cart.map((c, i) => {
-        const l = promoLines[i]
-        return {
-          product_id: c.product_id,
-          name: c.name,
-          quantity: c.qty,
-          paid_qty: l.paidQty,
-          free_qty: l.freeQty,
-          unit: c.unitMode === 'carton' ? 'carton' : 'unit',
-          price: unitPrice(c),
-          total: l.lineTotal,
-        }
-      })
-      const { error } = await supabase.from('orders').insert({
-        customer_name: store.name,
-        customer_phone: phone.trim() || null,
-        customer_address: store.address || null,
-        store_id: store.id,
-        items: JSON.stringify(items),
-        total,
-        discount: promoDiscount || 0,
-        status: 'processing',
-        notes: note.trim() || null,
-        employee_id: employee.id,
-        created_at: new Date().toISOString(),
+      // ✅ لم يعد السعر/الخصم/الإجمالي يُحسب هنا لغرض الحفظ — نُرسل فقط
+      // product_id/qty/unit لكل صنف، والخادم (submit_store_order RPC)
+      // يعيد حساب السعر من products والعروض من promotions بنفسه، ويرجع
+      // النتيجة الموثَّقة. subtotal/promoDiscount/total المحسوبة محلياً
+      // بالأعلى (بـapplyPromotions) تبقى فقط لعرض معاينة السلة قبل
+      // الإرسال — وليست ما يُحفَظ فعلياً.
+      const rpcItems = cart.map((c) => ({
+        product_id: c.product_id,
+        qty: c.qty,
+        unit: c.unitMode === 'carton' ? 'carton' : 'unit',
+      }))
+      const { data: result, error } = await supabase.rpc('submit_store_order', {
+        p_employee_id: employee.id,
+        p_store_id: store.id,
+        p_items: rpcItems,
+        p_customer_phone: phone.trim() || null,
+        p_notes: note.trim() || null,
       })
       if (error) throw error
-      showToast(`✅ تم تسجيل طلبية "${store.name}" بقيمة ${total.toFixed(0)} دج`)
+      showToast(`✅ تم تسجيل طلبية "${result.store_name}" بقيمة ${Number(result.total).toFixed(0)} دج`)
       const newOrder = {
-        storeName: store.name,
-        address: store.address,
-        items,
-        total,
+        storeName: result.store_name,
+        address: result.store_address,
+        items: result.items, // ✅ نفس الشكل القديم بالضبط (product_id/name/quantity/paid_qty/free_qty/unit/price/total)
+        total: Number(result.total),
         employeeName: employee.name,
         dateStr: new Date().toLocaleString('ar'),
       }
