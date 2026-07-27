@@ -161,10 +161,24 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
       })
       if (error) throw error
       showToast(`✅ تم تسجيل طلبية "${result.store_name}" بقيمة ${Number(result.total).toFixed(0)} دج`)
+      // ✅ الخادم لا يرجّع تفصيل خصم العرض لكل منتج (فقط الإجمالي)، فنربط
+      // كل عنصر من نتيجة الخادم (product_id/name/price/total الموثَّقة)
+      // بمبلغ خصمه المحسوب محلياً قبل الإرسال مباشرة (promoLines بنفس
+      // ترتيب/تطابق السلة لحظة الإرسال) — لعرضه فقط بالفاتورة المطبوعة
+      const promoByProduct = {}
+      promoLines.forEach((l) => { promoByProduct[l.id] = l })
+      const itemsWithPromo = (result.items || []).map((it) => {
+        const pl = promoByProduct[it.product_id]
+        return {
+          ...it,
+          promoAmount: pl?.promoAmount || 0,
+          netLineTotal: pl?.netLineTotal ?? Number(it.total || 0),
+        }
+      })
       const newOrder = {
         storeName: result.store_name,
         address: result.store_address,
-        items: result.items, // ✅ نفس الشكل القديم بالضبط (product_id/name/quantity/paid_qty/free_qty/unit/price/total)
+        items: itemsWithPromo, // ✅ نفس الشكل القديم (product_id/name/quantity/paid_qty/free_qty/unit/price/total) + promoAmount/netLineTotal
         total: Number(result.total),
         employeeName: employee.name,
         dateStr: new Date().toLocaleString('ar'),

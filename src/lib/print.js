@@ -188,7 +188,7 @@ function renderReceiptCanvas({ storeName, address, items, total, employeeName, d
   const fSub = Math.round(16 * scale)
   const fSmall = Math.round(14 * scale)
   const fTotal = Math.round(20 * scale)
-  const estimatedLines = 6 + items.length * 2 + (getFooterText() ? 1 : 0)
+  const estimatedLines = 6 + items.length + items.filter(it => it.promoAmount > 0).length + (getFooterText() ? 1 : 0)
   canvas.width = widthDots
   canvas.height = estimatedLines * lineHeight + padding * 2
 
@@ -208,11 +208,22 @@ function renderReceiptCanvas({ storeName, address, items, total, employeeName, d
   ctx.textAlign = 'right'
   ctx.font = `${fSub}px sans-serif`
   items.forEach(it => {
+    ctx.font = `${fSub}px sans-serif`
+    ctx.textAlign = 'right'
     ctx.fillText(`${it.name} × ${it.quantity}`, canvas.width - padding, y)
     ctx.textAlign = 'left'
     ctx.fillText(`${it.total.toFixed(0)} دج`, padding, y)
-    ctx.textAlign = 'right'
     y += lineHeight
+
+    // ✅ سطر ثانٍ فقط لو هذا المنتج استفاد فعلاً من عرض — يبيّن مبلغ
+    // الخصم والصافي بعده، دون إضافة أعمدة فارغة (ضرائب/خصم يدوي) غير
+    // موجودة أصلاً بالنظام
+    if (it.promoAmount > 0) {
+      ctx.font = `${Math.round(fSmall * 0.95)}px sans-serif`
+      ctx.textAlign = 'right'
+      ctx.fillText(`🎯 خصم عرض: -${it.promoAmount.toFixed(0)} دج  ←  الصافي: ${it.netLineTotal.toFixed(0)} دج`, canvas.width - padding, y)
+      y += Math.round(lineHeight * 0.8)
+    }
   })
 
   y += lineHeight * 0.4
