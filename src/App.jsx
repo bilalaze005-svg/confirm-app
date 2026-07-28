@@ -3,6 +3,7 @@ import { configError, supabase } from './lib/supabase.js'
 import { T, offlineBannerStyle } from './lib/theme.js'
 import useToast from './hooks/useToast.jsx'
 import useOnlineStatus from './hooks/useOnlineStatus.js'
+import { pendingCount, syncPendingOrders } from './lib/offlineQueue.js'
 import { fetchNotifications, subscribeToNotifications } from './lib/notifications.js'
 import NotificationBell from './components/NotificationBell.jsx'
 import NotificationsScreen from './screens/NotificationsScreen.jsx'
@@ -13,7 +14,6 @@ import NewStoreScreen from './screens/NewStoreScreen.jsx'
 import OrderScreen from './screens/OrderScreen.jsx'
 import OrdersHistoryScreen from './screens/OrdersHistoryScreen.jsx'
 import AccountingScreen from './screens/AccountingScreen.jsx'
-import PromotionsScreen from './screens/PromotionsScreen.jsx'
 
 export default function App() {
   const [employee, setEmployee] = useState(() => {
@@ -26,6 +26,8 @@ export default function App() {
   const [confirmLogout, setConfirmLogout] = useState(false)
   const [showToast, ToastUI] = useToast()
   const isOnline = useOnlineStatus()
+  const [pending, setPending] = useState(() => pendingCount())
+  const [syncing, setSyncing] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [overlay, setOverlay] = useState(null) // null | 'notifications' | 'printSettings'
 
@@ -51,6 +53,31 @@ export default function App() {
   }, [employee])
 
   useEffect(() => { loadTodayCount() }, [loadTodayCount])
+
+  const runSync = useCallback(async () => {
+    if (syncing || pendingCount() === 0) return
+    setSyncing(true)
+    try {
+      const { synced, failed } = await syncPendingOrders(supabase)
+      setPending(pendingCount())
+      if (synced > 0) showToast(`✅ تمت مزامنة ${synced} طلبية كانت معلّقة`)
+      if (failed > 0) showToast(`⚠️ ${failed} طلبية لم تُزامَن بعد — راجعها`, true)
+    } finally {
+      setSyncing(false)
+    }
+  }, [syncing, showToast])
+
+  // مزامنة تلقائية عند عودة الاتصال وعند فتح التطبيق
+  useEffect(() => {
+    if (isOnline) runSync()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline])
+
+  // تحديث عدّاد المعلّق دورياً (بعد كل طلبية جديدة تُحفظ محلياً بلا اتصال)
+  useEffect(() => {
+    const t = setInterval(() => setPending(pendingCount()), 4000)
+    return () => clearInterval(t)
+  }, [])
 
   // إعادة تحميل العداد تلقائياً لما يرجع الاتصال بعد انقطاع
   useEffect(() => {
@@ -102,7 +129,17 @@ export default function App() {
       {ToastUI}
 
       {!isOnline && (
-        <div style={offlineBannerStyle}>📡 لا يوجد اتصال بالإنترنت — لن يتم حفظ أي تغييرات الآن</div>
+        <div style={offlineBannerStyle}>📡 لا يوجد اتصال — الطلبيات الجديدة تُحفَظ محلياً وتُرسَل تلقائياً عند عودة الشبكة</div>
+      )}
+
+      {(isOnline && pending > 0) && (
+        <div style={{ ...offlineBannerStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <span>🔄 {pending} طلبية بانتظار المزامنة</span>
+          <button onClick={runSync} disabled={syncing}
+            style={{ background: 'rgba(255,255,255,.25)', border: 'none', borderRadius: 8, padding: '5px 10px', fontWeight: 800, fontSize: 12, color: 'inherit', cursor: 'pointer' }}>
+            {syncing ? '⏳' : 'مزامنة الآن'}
+          </button>
+        </div>
       )}
 
       <div style={{ background: T.primaryGradient, padding: '20px 18px 22px', color: 'white', borderRadius: '0 0 28px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 6px 20px rgba(124,58,237,.25)' }}>
@@ -159,12 +196,6 @@ export default function App() {
         </div>
       )}
 
-      {overlay === 'promotions' && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 50 }}>
-          <PromotionsScreen onClose={() => setOverlay(null)} />
-        </div>
-      )}
-
       {view === 'select' && (
         <StoreSelectScreen
           showToast={showToast}
@@ -200,7 +231,6 @@ export default function App() {
         boxShadow: '0 -4px 16px rgba(0,0,0,.06)', zIndex: 40 }}>
         {[
           { id: 'myOrders',   icon: '📦', label: 'طلبياتي' },
-          { id: 'promotions', icon: '🎯', label: 'عروض' },
           { id: 'accounting', icon: '📊', label: 'محاسبة' },
         ].map(t => (
           <button key={t.id} onClick={() => setOverlay(t.id)}
