@@ -14,6 +14,7 @@ import NewStoreScreen from './screens/NewStoreScreen.jsx'
 import OrderScreen from './screens/OrderScreen.jsx'
 import OrdersHistoryScreen from './screens/OrdersHistoryScreen.jsx'
 import AccountingScreen from './screens/AccountingScreen.jsx'
+import PromotionsScreen from './screens/PromotionsScreen.jsx'
 
 export default function App() {
   const [employee, setEmployee] = useState(() => {
@@ -196,6 +197,12 @@ export default function App() {
         </div>
       )}
 
+      {overlay === 'promotions' && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50 }}>
+          <PromotionsScreen onClose={() => setOverlay(null)} />
+        </div>
+      )}
+
       {view === 'select' && (
         <StoreSelectScreen
           showToast={showToast}
@@ -231,6 +238,7 @@ export default function App() {
         boxShadow: '0 -4px 16px rgba(0,0,0,.06)', zIndex: 40 }}>
         {[
           { id: 'myOrders',   icon: '📦', label: 'طلبياتي' },
+          { id: 'promotions', icon: '🎯', label: 'عروض' },
           { id: 'accounting', icon: '📊', label: 'محاسبة' },
         ].map(t => (
           <button key={t.id} onClick={() => setOverlay(t.id)}
