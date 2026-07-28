@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase.js'
 import { getAutoPrint, isConnected, reconnectSavedPrinter, printReceipt } from '../lib/print.js'
 import { applyPromotions } from '../lib/promotions.js'
+import { queueOrder } from '../lib/offlineQueue.js'
 
 /**
  * @typedef {Object} StoreCartItem
@@ -138,7 +139,29 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
 
   const submitOrder = async ({ phone, note }) => {
     if (cart.length === 0) { showToast('⚠️ السلة فارغة', true); return }
-    if (!isOnline) { showToast('📡 لا يوجد اتصال بالإنترنت — لا يمكن إرسال الطلبية الآن', true); return }
+
+    const rpcItems = cart.map((c) => ({
+      product_id: c.product_id,
+      qty: c.qty,
+      unit: c.unitMode === 'carton' ? 'carton' : 'unit',
+    }))
+
+    // ✅ إصلاح: كان عدم وجود اتصال يمنع تسجيل الطلبية بالكامل ويُفقد كل
+    // ما أدخله المندوب. الآن (بنفس نمط van-app تماماً): تُحفَظ الطلبية
+    // محلياً وتُرسَل تلقائياً بمجرد عودة الاتصال، دون أن يفقد المندوب شيئاً.
+    if (!isOnline) {
+      queueOrder({
+        employee_id: employee.id,
+        store_id: store.id,
+        items: rpcItems,
+        customer_phone: phone.trim() || null,
+        notes: note.trim() || null,
+      })
+      showToast('📡 لا يوجد اتصال — تم حفظ الطلبية محلياً وستُرسَل تلقائياً عند عودة الشبكة')
+      setCart([])
+      return true
+    }
+
     setSaving(true)
     try {
       // ✅ لم يعد السعر/الخصم/الإجمالي يُحسب هنا لغرض الحفظ — نُرسل فقط
@@ -147,11 +170,6 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
       // النتيجة الموثَّقة. subtotal/promoDiscount/total المحسوبة محلياً
       // بالأعلى (بـapplyPromotions) تبقى فقط لعرض معاينة السلة قبل
       // الإرسال — وليست ما يُحفَظ فعلياً.
-      const rpcItems = cart.map((c) => ({
-        product_id: c.product_id,
-        qty: c.qty,
-        unit: c.unitMode === 'carton' ? 'carton' : 'unit',
-      }))
       const { data: result, error } = await supabase.rpc('submit_store_order', {
         p_employee_id: employee.id,
         p_store_id: store.id,
@@ -161,24 +179,10 @@ export default function useStoreOrder({ store, employee, showToast, isOnline, se
       })
       if (error) throw error
       showToast(`✅ تم تسجيل طلبية "${result.store_name}" بقيمة ${Number(result.total).toFixed(0)} دج`)
-      // ✅ الخادم لا يرجّع تفصيل خصم العرض لكل منتج (فقط الإجمالي)، فنربط
-      // كل عنصر من نتيجة الخادم (product_id/name/price/total الموثَّقة)
-      // بمبلغ خصمه المحسوب محلياً قبل الإرسال مباشرة (promoLines بنفس
-      // ترتيب/تطابق السلة لحظة الإرسال) — لعرضه فقط بالفاتورة المطبوعة
-      const promoByProduct = {}
-      promoLines.forEach((l) => { promoByProduct[l.id] = l })
-      const itemsWithPromo = (result.items || []).map((it) => {
-        const pl = promoByProduct[it.product_id]
-        return {
-          ...it,
-          promoAmount: pl?.promoAmount || 0,
-          netLineTotal: pl?.netLineTotal ?? Number(it.total || 0),
-        }
-      })
       const newOrder = {
         storeName: result.store_name,
         address: result.store_address,
-        items: itemsWithPromo, // ✅ نفس الشكل القديم (product_id/name/quantity/paid_qty/free_qty/unit/price/total) + promoAmount/netLineTotal
+        items: result.items, // ✅ نفس الشكل القديم بالضبط (product_id/name/quantity/paid_qty/free_qty/unit/price/total)
         total: Number(result.total),
         employeeName: employee.name,
         dateStr: new Date().toLocaleString('ar'),
